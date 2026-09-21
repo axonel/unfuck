@@ -1,18 +1,83 @@
 use crate::evidence::Evidence;
+use crate::version::VersionConstraint;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::PathBuf;
+
+/// Category of tool within a development environment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolKind {
+    Runtime,
+    PackageManager,
+    DeveloperTool,
+    BuildTool,
+    CodeGenerator,
+    Service,
+}
+
+impl std::fmt::Display for ToolKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Runtime => write!(f, "runtime"),
+            Self::PackageManager => write!(f, "package manager"),
+            Self::DeveloperTool => write!(f, "developer tool"),
+            Self::BuildTool => write!(f, "build tool"),
+            Self::CodeGenerator => write!(f, "code generator"),
+            Self::Service => write!(f, "service"),
+        }
+    }
+}
+
+/// Operational scope of a tool requirement.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolScope {
+    /// Necessary for core application execution and development.
+    RequiredForProject,
+    /// Necessary for building/compiling the project or native assets.
+    RequiredForBuild,
+    /// Needed only for specific scripts, tasks, deployment, or code generation.
+    RequiredForTask,
+    /// Optional tool.
+    Optional,
+    /// Declared in configuration files but not invoked in scripts.
+    DeclaredButUnused,
+    /// Scope could not be deterministically resolved.
+    Unknown,
+}
 
 /// Requirement kind declared by or inferred from a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RequirementKind {
-    /// Language or runtime requirement (e.g. Python >= 3.11, Node >= 20.0.0).
-    Runtime { name: String, constraint: String },
-    /// Package manager requirement (e.g. bun >= 1.0, uv, pnpm).
+    /// Language or runtime requirement (e.g. Python >= 3.11, Node == 24.21.0).
+    Runtime {
+        name: String,
+        constraint: VersionConstraint,
+    },
+    /// Package manager requirement (e.g. pnpm == 11.24.0, bun >= 1.0, uv).
     PackageManager {
         name: String,
-        constraint: Option<String>,
+        constraint: Option<VersionConstraint>,
+    },
+    /// Developer or infrastructure tool (e.g. opentofu, terragrunt, extism/cli).
+    DeveloperTool {
+        name: String,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
+    },
+    /// Build tool or compiler (e.g. binaryen, cmake, make, ninja).
+    BuildTool {
+        name: String,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
+    },
+    /// Code generation tool (e.g. oazapfts, openapi-generator-cli, protoc).
+    CodeGenerator {
+        name: String,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
     },
     /// TCP or UDP port expected by the project (e.g. 3000, 5432, 8080).
     Port {
@@ -36,7 +101,7 @@ pub enum RequirementKind {
     Arch { name: String },
     /// Minimum physical or available memory.
     Memory { min_bytes: u64 },
-    /// Conflict between multiple configuration sources (e.g. .nvmrc says 20, package.json says >=22).
+    /// Conflict between multiple configuration sources.
     Conflict {
         target: String,
         details: String,
@@ -44,12 +109,25 @@ pub enum RequirementKind {
     },
 }
 
-/// A specific requirement declared by a project, with evidence.
+/// A specific requirement declared by a project, preserving evidence and multi-source provenance.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectRequirement {
     pub name: String,
     pub kind: RequirementKind,
     pub evidence: Evidence,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub additional_evidence: Vec<Evidence>,
+}
+
+impl ProjectRequirement {
+    pub fn new(name: impl Into<String>, kind: RequirementKind, evidence: Evidence) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            evidence,
+            additional_evidence: Vec::new(),
+        }
+    }
 }
 
 /// An installed runtime on the machine.
@@ -57,6 +135,25 @@ pub struct ProjectRequirement {
 pub struct Runtime {
     pub name: String,
     pub version: String,
+    pub executable_path: PathBuf,
+    pub evidence: Evidence,
+}
+
+/// An observed package manager on the host system.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PackageManagerObservation {
+    pub name: String,
+    pub version: Option<String>,
+    pub executable_path: PathBuf,
+    pub evidence: Evidence,
+}
+
+/// An observed developer, build, or codegen tool on the host system.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolObservation {
+    pub name: String,
+    pub kind: ToolKind,
+    pub version: Option<String>,
     pub executable_path: PathBuf,
     pub evidence: Evidence,
 }
@@ -111,6 +208,8 @@ pub struct MachineCapability {
     pub total_memory_bytes: u64,
     pub available_memory_bytes: u64,
     pub runtimes: Vec<Runtime>,
+    pub package_managers: Vec<PackageManagerObservation>,
+    pub tools: Vec<ToolObservation>,
     pub services: Vec<Service>,
     pub listening_ports: Vec<PortInfo>,
     pub env_vars: HashMap<String, String>,
@@ -119,10 +218,41 @@ pub struct MachineCapability {
 }
 
 impl MachineCapability {
+    pub fn empty() -> Self {
+        Self {
+            os: "Linux".to_string(),
+            os_family: "linux".to_string(),
+            arch: "x86_64".to_string(),
+            cpu_count: 4,
+            total_memory_bytes: 8 * 1024 * 1024 * 1024,
+            available_memory_bytes: 4 * 1024 * 1024 * 1024,
+            runtimes: Vec::new(),
+            package_managers: Vec::new(),
+            tools: Vec::new(),
+            services: Vec::new(),
+            listening_ports: Vec::new(),
+            env_vars: HashMap::new(),
+            path_entries: Vec::new(),
+            evidence: Vec::new(),
+        }
+    }
+
     pub fn find_runtime(&self, name: &str) -> Option<&Runtime> {
         self.runtimes
             .iter()
             .find(|r| r.name.eq_ignore_ascii_case(name))
+    }
+
+    pub fn find_package_manager(&self, name: &str) -> Option<&PackageManagerObservation> {
+        self.package_managers
+            .iter()
+            .find(|p| p.name.eq_ignore_ascii_case(name))
+    }
+
+    pub fn find_tool(&self, name: &str) -> Option<&ToolObservation> {
+        self.tools
+            .iter()
+            .find(|t| t.name.eq_ignore_ascii_case(name))
     }
 
     pub fn find_service(&self, name: &str) -> Option<&Service> {

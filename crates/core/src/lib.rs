@@ -2,11 +2,13 @@ pub mod confidence;
 pub mod error;
 pub mod evidence;
 pub mod ir;
+pub mod version;
 
 pub use confidence::Confidence;
 pub use error::{Result, UnfuckError};
 pub use evidence::{Evidence, EvidenceSource};
 pub use ir::*;
+pub use version::*;
 
 #[cfg(test)]
 mod tests {
@@ -47,13 +49,14 @@ mod tests {
                 name: "python".to_string(),
                 kind: RequirementKind::Runtime {
                     name: "python".to_string(),
-                    constraint: ">= 3.11".to_string(),
+                    constraint: VersionConstraint::parse(">= 3.11"),
                 },
                 evidence: Evidence::from_repo_file(
                     PathBuf::from("pyproject.toml"),
                     Some(5),
                     "requires-python >= 3.11",
                 ),
+                additional_evidence: vec![],
             }],
             declared_ports: vec![8000],
             env_vars: vec!["DATABASE_URL".to_string()],
@@ -80,6 +83,8 @@ mod tests {
                     "python3 --version",
                 ),
             }],
+            package_managers: vec![],
+            tools: vec![],
             services: vec![],
             listening_ports: vec![PortInfo {
                 port: 8000,
