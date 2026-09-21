@@ -1,0 +1,190 @@
+#!/bin/sh
+# UNFUCK Installer
+# One-command installer for UNFUCK: Development Environment Engine
+# Repository: https://github.com/axonel/unfuck
+
+set -eu
+
+REPO="${UNFUCK_REPO:-axonel/unfuck}"
+VERSION="${UNFUCK_VERSION:-v0.1.0}"
+INSTALL_DIR="${UNFUCK_INSTALL_DIR:-$HOME/.local/bin}"
+
+# ANSI color codes
+BOLD='\033[1m'
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+RED='\033[0;31m'
+YELLOW='\033[0;33m'
+RESET='\033[0m'
+
+print_banner() {
+    printf "${CYAN}${BOLD}"
+    printf "UNFUCK — Development Environment Resolution Engine\n"
+    printf "──────────────────────────────────────────────────\n"
+    printf "${RESET}"
+}
+
+info() {
+    printf "${GREEN}==>${RESET} ${BOLD}%s${RESET}\n" "$1"
+}
+
+warn() {
+    printf "${YELLOW}warning:${RESET} %s\n" "$1"
+}
+
+error() {
+    printf "${RED}error:${RESET} %s\n" "$1" >&2
+    exit 1
+}
+
+# 1. Platform Detection
+detect_os() {
+    OS="$(uname -s)"
+    case "$OS" in
+        Linux|linux)
+            echo "linux"
+            ;;
+        Darwin|darwin)
+            error "macOS is not yet supported in this release. UNFUCK currently targets Linux development environments."
+            ;;
+        *)
+            error "Unsupported operating system: $OS. UNFUCK requires Linux."
+            ;;
+    esac
+}
+
+# 2. Architecture Detection
+detect_arch() {
+    ARCH="$(uname -m)"
+    case "$ARCH" in
+        x86_64|amd64)
+            echo "x86_64"
+            ;;
+        aarch64|arm64)
+            error "ARM64 architecture support will be available in future releases. Supported architecture: x86_64."
+            ;;
+        *)
+            error "Unsupported CPU architecture: $ARCH. Supported architecture: x86_64."
+            ;;
+    esac
+}
+
+# 3. HTTP Download Helper (curl or wget)
+download_file() {
+    url="$1"
+    output="$2"
+
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$output"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -qO "$output" "$url"
+    else
+        error "Neither curl nor wget was found on your system. Please install one to proceed."
+    fi
+}
+
+# 4. Compute SHA256
+compute_sha256() {
+    file="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$file" | awk '{print $1}'
+    elif command -v shasum >/dev/null 2>&1; then
+        shasum -a 256 "$file" | awk '{print $1}'
+    elif command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file" | awk '{print $NF}'
+    else
+        error "No SHA256 utility found (sha256sum, shasum, or openssl required)."
+    fi
+}
+
+main() {
+    print_banner
+
+    OS=$(detect_os)
+    ARCH=$(detect_arch)
+
+    info "Detected platform: ${OS}-${ARCH}"
+    info "Target version:   ${VERSION}"
+    info "Install directory: ${INSTALL_DIR}"
+
+    ARCHIVE_NAME="unfuck-${VERSION}-${OS}-${ARCH}.tar.gz"
+    RELEASE_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
+    CHECKSUM_URL="${RELEASE_URL}.sha256"
+
+    TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'unfuck-install')"
+    trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+
+    ARCHIVE_PATH="${TMP_DIR}/${ARCHIVE_NAME}"
+    CHECKSUM_PATH="${TMP_DIR}/${ARCHIVE_NAME}.sha256"
+
+    info "Downloading ${ARCHIVE_NAME}..."
+    if ! download_file "$RELEASE_URL" "$ARCHIVE_PATH"; then
+        error "Failed to download release archive from $RELEASE_URL"
+    fi
+
+    info "Downloading checksum..."
+    if ! download_file "$CHECKSUM_URL" "$CHECKSUM_PATH"; then
+        error "Failed to download checksum file from $CHECKSUM_URL"
+    fi
+
+    # Read expected checksum (first field of .sha256 file)
+    EXPECTED_HASH="$(awk '{print $1}' "$CHECKSUM_PATH")"
+    ACTUAL_HASH="$(compute_sha256 "$ARCHIVE_PATH")"
+
+    info "Verifying SHA256 checksum..."
+    if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+        error "Checksum verification failed!\n  Expected: $EXPECTED_HASH\n  Actual:   $ACTUAL_HASH"
+    fi
+    printf "  Checksum OK: %s\n" "$ACTUAL_HASH"
+
+    info "Extracting binary..."
+    tar -xzf "$ARCHIVE_PATH" -C "$TMP_DIR"
+
+    EXTRACTED_BIN="${TMP_DIR}/unfuck-${VERSION}-${OS}-${ARCH}/unfuck"
+    if [ ! -f "$EXTRACTED_BIN" ]; then
+        # Fallback if tar extracted directly to root
+        EXTRACTED_BIN="${TMP_DIR}/unfuck"
+    fi
+
+    if [ ! -f "$EXTRACTED_BIN" ]; then
+        error "Extracted archive did not contain 'unfuck' binary."
+    fi
+
+    # Install to target directory
+    mkdir -p "$INSTALL_DIR"
+    cp "$EXTRACTED_BIN" "${INSTALL_DIR}/unfuck"
+    chmod +x "${INSTALL_DIR}/unfuck"
+
+    info "Successfully installed unfuck to ${INSTALL_DIR}/unfuck"
+
+    # Verify execution
+    INSTALLED_VERSION="$("${INSTALL_DIR}/unfuck" --version 2>/dev/null || true)"
+    if [ -z "$INSTALLED_VERSION" ]; then
+        error "Binary installed but failed to execute: ${INSTALL_DIR}/unfuck --version"
+    fi
+
+    printf "${GREEN}${BOLD}✓ Verified: %s${RESET}\n\n" "$INSTALLED_VERSION"
+
+    # Check if INSTALL_DIR is in PATH
+    case ":$PATH:" in
+        *":$INSTALL_DIR:"*)
+            # Already on PATH
+            ;;
+        *)
+            warn "${INSTALL_DIR} is NOT currently in your PATH environment variable."
+            printf "\nTo make 'unfuck' available from any directory, add this to your shell profile:\n"
+            printf "  ${BOLD}export PATH=\"%s:\$PATH\"${RESET}\n\n" "$INSTALL_DIR"
+            printf "For bash (~/.bashrc):\n"
+            printf "  echo 'export PATH=\"%s:\$PATH\"' >> ~/.bashrc && source ~/.bashrc\n\n" "$INSTALL_DIR"
+            printf "For zsh (~/.zshrc):\n"
+            printf "  echo 'export PATH=\"%s:\$PATH\"' >> ~/.zshrc && source ~/.zshrc\n\n" "$INSTALL_DIR"
+            printf "For fish (~/.config/fish/config.fish):\n"
+            printf "  fish_add_path %s\n\n" "$INSTALL_DIR"
+            ;;
+    esac
+
+    printf "Run UNFUCK on your repository:\n"
+    printf "  ${CYAN}${BOLD}unfuck .${RESET}\n"
+}
+
+main "$@"

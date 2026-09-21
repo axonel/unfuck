@@ -11,7 +11,7 @@ use unfuck_scanner::scan_machine;
 #[command(
     name = "unfuck",
     author = "Axonel Team",
-    version = "0.1.0",
+    version,
     about = "Development-environment resolution engine",
     long_about = "UNFUCK models development environments as constraint systems, predicting failures before they happen and explaining root causes with structured evidence."
 )]

@@ -1,58 +1,49 @@
 # UNFUCK
 
-> **UNFUCK is a development-environment resolution engine that models repositories and host machines as constraint-driven dependency graphs, predicts failures before they happen, determines root causes with traceable evidence, and verifies environment invariants.**
+> **Development-environment resolution engine that predicts failures before they happen, determines root causes with verifiable evidence, and proves environment invariants.**
 
-Core principle:
-> **UNFUCK must be useful without an LLM.** Any LLM integration is optional and sits strictly above deterministic system intelligence.
+Modern development setups fail because code does not run in isolation—it depends on runtimes, system libraries, listening ports, background services, environment variables, and OS capabilities.
 
----
+Conventional "doctor" commands merely test if a command exists in PATH.
 
-## What UNFUCK Does Today (Phase 1)
+**UNFUCK models your project and machine as a constraint graph to answer:**
+> *Why will this project fail on this machine, what chain of dependencies causes the failure, and can we prove it before running?*
 
-Unlike superficial "doctor" commands that merely check `command -v <binary>`, UNFUCK:
-
-1. **Discovers Project Invariants**: Parses `package.json`, `bun.lock`, `pyproject.toml`, `requirements.txt`, `Dockerfile`, `compose.yaml`, `.nvmrc`, `.python-version`, `.tool-versions`, `mise.toml`, and `.env.example` to extract typed runtime, service, port, and environment requirements.
-2. **Inspects the Host Machine**: Reads kernel `/proc` interfaces (`/proc/net/tcp`, `/proc/net/tcp6`, `/proc/[pid]/fd`), OS metadata (`/etc/os-release`), hardware specs, system PATH, installed runtimes (Node, Bun, Python, Rust, Go, Java), and system services (Docker, PostgreSQL) with exact provenance.
-3. **Builds an Environment IR & Graph**: Merges project requirements and machine observations into a strongly typed Intermediate Representation (IR) and dependency graph.
-4. **Evaluates Constraints Data-Driven**: Evaluates version expressions, port availability, service presence, and OS/architecture compatibility through a unified constraint evaluator without ad-hoc `if` branches.
-5. **Predicts Failures Deterministically**: Identifies runtime mismatches, port collisions, missing services, and configuration gaps before you run `npm start`, `python main.py`, or `docker compose up`.
-6. **Explains Root Causes**: Traces causal chains back to the earliest known violated invariant and presents evidence with explicit confidence ratings (`CONFIRMED`, `HIGH`, `MEDIUM`, `LOW`).
-7. **Performs Read-Only Verification**: Verifies your development environment against repository requirements without modifying system state.
-8. **First-Class JSON API**: Every command supports `--json` for pipeline integration and machine consumption.
+**Zero AI required.** UNFUCK is 100% deterministic systems software written in Rust.
 
 ---
 
-## Installation & Build
+## Quick Install (Linux x86_64)
 
-Requires a modern Rust toolchain (Rust 1.80+):
+Install the latest release with one command (no Rust, Cargo, Node, or Docker required):
 
 ```bash
-git clone https://github.com/axonel/unfuck.git
-cd unfuck
-cargo build --release
+curl -fsSL https://raw.githubusercontent.com/axonel/unfuck/main/install.sh | sh
 ```
 
-The executable will be located at `./target/release/unfuck`.
+The installer verifies SHA256 checksums automatically and places `unfuck` in `~/.local/bin`.
+
+To install a specific version or custom directory:
+```bash
+curl -fsSL https://raw.githubusercontent.com/axonel/unfuck/main/install.sh | UNFUCK_VERSION=v0.1.0 sh
+```
 
 ---
 
-## Usage
+## 30-Second Tour
 
-### 1. Default Inspection (`unfuck [PATH]`)
-
-Runs the full pipeline against a repository (defaulting to current directory):
+### 1. Run in your project root
 
 ```bash
 unfuck .
 ```
 
-#### Example: Healthy Environment
-
+#### If your environment is compatible:
 ```text
 UNFUCK — Development Environment Engine
 ──────────────────────────────────────────
 Project:     .
-Name:        my-project
+Name:        my-backend
 Languages:   python
 
 Environment: COMPATIBLE
@@ -66,8 +57,7 @@ Environment: COMPATIBLE
 No known blockers.
 ```
 
-#### Example: Broken Environment
-
+#### If your environment has contradictions:
 ```text
 UNFUCK — Development Environment Engine
 ──────────────────────────────────────────
@@ -89,13 +79,13 @@ Next steps:
 
 ---
 
-### 2. Root-Cause Explanation (`unfuck explain [PATH]`)
-
-Explains why the failure will occur, mapping the causal chain from host observation to application failure:
+### 2. Inspect the causal root causes
 
 ```bash
-unfuck explain tests/fixtures/broken-python-version
+unfuck explain
 ```
+
+Traces the dependency graph back to the earliest violated invariant with exact machine provenance:
 
 ```text
 UNFUCK — Development Environment Engine
@@ -129,12 +119,12 @@ Root-Cause Diagnosis & Causal Chains
 
 ---
 
-### 3. Read-Only Verification (`unfuck verify [PATH]`)
+### 3. Read-only verification
 
-Runs non-destructive verification checks:
+Verify all requirements, ports, and services non-destructively:
 
 ```bash
-unfuck verify tests/fixtures/broken-python-version
+unfuck verify
 ```
 
 ```text
@@ -152,9 +142,9 @@ Environment verification FAILED.
 
 ---
 
-### 4. Structured JSON Output (`--json`)
+### 4. Machine-readable JSON output
 
-Every command supports `--json` for machine readability:
+Every command supports `--json` for CI/CD pipelines, pre-commit hooks, and developer tooling:
 
 ```bash
 unfuck . --json
@@ -163,13 +153,13 @@ unfuck . --json
 ```json
 {
   "project": {
-    "name": "my-app",
-    "root_path": "/path/to/my-app",
+    "name": "broken-python-version",
+    "root_path": "/workspace/broken-python-version",
     "languages": ["python"],
-    "package_managers": ["uv"],
+    "package_managers": [],
     "requirements": [...],
-    "declared_ports": [8000],
-    "env_vars": ["DATABASE_URL"],
+    "declared_ports": [],
+    "env_vars": [],
     "docker_used": false,
     "evidence": [...]
   },
@@ -182,7 +172,15 @@ unfuck . --json
     "listening_ports": [...]
   },
   "evaluated_constraints": [...],
-  "predictions": [...],
+  "predictions": [
+    {
+      "title": "python runtime incompatibility predicted",
+      "category": "runtime_incompatibility",
+      "summary": "Project expects python >=3.99.0, but Runtime 'python' version 3.12.4 does not satisfy requirement >=3.99.0.",
+      "confidence": "HIGH",
+      "affected_components": ["python", "build", "startup"]
+    }
+  ],
   "diagnoses": [...],
   "verification": {
     "success": false,
@@ -196,29 +194,64 @@ unfuck . --json
 
 ---
 
-## Architecture
+## Supported Ecosystems (v0.1.0)
 
-UNFUCK is structured as a modular Cargo workspace:
+| Category | Supported Technologies |
+| :--- | :--- |
+| **Host OS** | Linux (Ubuntu, Debian, Fedora, Arch, Alpine, etc.) on `x86_64` |
+| **Languages & Runtimes** | Node.js, Bun, Python, Rust, Go, Java |
+| **Package Managers** | npm, pnpm, yarn, bun, uv, poetry, pipenv |
+| **Containers & Services** | Docker (daemon socket inspection), PostgreSQL (port 5432, sockets, psql) |
+| **Project Signals** | `package.json`, `bun.lock`, `pyproject.toml`, `requirements.txt`, `uv.lock`, `Dockerfile`, `docker-compose.yml`, `compose.yaml`, `.nvmrc`, `.python-version`, `.tool-versions`, `mise.toml`, `.env.example` |
 
-```text
-crates/
-    core/         # Environment IR, Evidence, Confidence, common types & errors
-    scanner/      # Deterministic Linux machine inspection with provenance
-    project/      # Repository signal discovery & parsing (Node/Bun, Python, Docker, etc.)
-    constraints/  # Data-driven constraint evaluation (Version, Port, Arch, OS, Memory)
-    graph/        # Environment graph connecting project, capabilities, constraints, evidence
-    predictor/    # Deterministic failure prediction
-    diagnosis/    # Root-cause causal explanation without LLMs
-    verifier/     # Read-only verification engine
-    cli/          # Command-line interface with human & JSON formatting
-tests/
-    fixtures/     # Representative test repositories (healthy and broken)
+---
+
+## Manual Download & Verification
+
+If you prefer to download release binaries directly from GitHub Releases:
+
+1. Download the archive and SHA256 checksum:
+   ```bash
+   curl -LO https://github.com/axonel/unfuck/releases/download/v0.1.0/unfuck-v0.1.0-linux-x86_64.tar.gz
+   curl -LO https://github.com/axonel/unfuck/releases/download/v0.1.0/unfuck-v0.1.0-linux-x86_64.tar.gz.sha256
+   ```
+
+2. Verify the checksum:
+   ```bash
+   sha256sum -c unfuck-v0.1.0-linux-x86_64.tar.gz.sha256
+   ```
+
+3. Extract and move to your PATH:
+   ```bash
+   tar -xzf unfuck-v0.1.0-linux-x86_64.tar.gz
+   mkdir -p ~/.local/bin
+   mv unfuck-v0.1.0-linux-x86_64/unfuck ~/.local/bin/
+   ```
+
+---
+
+## Building From Source
+
+```bash
+git clone https://github.com/axonel/unfuck.git
+cd unfuck
+cargo build --release
+./target/release/unfuck --version
 ```
 
-See [ARCHITECTURE.md](file:///home/roonakyadav/Projects/unfuck/ARCHITECTURE.md) and [docs/ENVIRONMENT_MODEL.md](file:///home/roonakyadav/Projects/unfuck/docs/ENVIRONMENT_MODEL.md) for deeper architectural details.
+---
+
+## Architecture & Design
+
+See [ARCHITECTURE.md](file:///home/roonakyadav/Projects/unfuck/ARCHITECTURE.md) for details on:
+- The 8-stage deterministic resolution pipeline
+- Environment IR and Evidence provenance model
+- Data-driven constraint evaluation
+- Graph traversal and causal chain tracing
+- Planned roadmap (Minimal Repair Planner, Counterfactual Simulation, Transactional Execution)
 
 ---
 
 ## License
 
-Apache-2.0
+[Apache-2.0](file:///home/roonakyadav/Projects/unfuck/LICENSE) © [Axonel](https://github.com/axonel)
