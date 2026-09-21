@@ -1,28 +1,53 @@
 use crate::model::{Constraint, ConstraintStatus, EvaluatedConstraint};
 use crate::version::matches_version_constraint;
 use unfuck_core::evidence::Evidence;
-use unfuck_core::ir::{MachineCapability, ProjectRequirement, RequirementKind, ServiceStatus};
+use unfuck_core::ir::{
+    MachineCapability, ProjectRequirement, RequirementKind, ServiceStatus, ToolKind,
+};
 
 /// Convert a ProjectRequirement into a Constraint.
 pub fn requirement_to_constraint(req: &ProjectRequirement) -> Option<Constraint> {
     match &req.kind {
         RequirementKind::Runtime { name, constraint } => Some(Constraint::RuntimeVersion {
             runtime: name.clone(),
-            constraint_str: constraint.clone(),
+            constraint: constraint.clone(),
         }),
         RequirementKind::PackageManager { name, constraint } => {
-            if let Some(c) = constraint {
-                Some(Constraint::RuntimeVersion {
-                    runtime: name.clone(),
-                    constraint_str: c.clone(),
-                })
-            } else {
-                Some(Constraint::RuntimeVersion {
-                    runtime: name.clone(),
-                    constraint_str: "*".to_string(),
-                })
-            }
+            Some(Constraint::PackageManagerVersion {
+                name: name.clone(),
+                constraint: constraint.clone(),
+            })
         }
+        RequirementKind::DeveloperTool {
+            name,
+            constraint,
+            scope,
+        } => Some(Constraint::ToolAvailable {
+            name: name.clone(),
+            kind: ToolKind::DeveloperTool,
+            constraint: constraint.clone(),
+            scope: *scope,
+        }),
+        RequirementKind::BuildTool {
+            name,
+            constraint,
+            scope,
+        } => Some(Constraint::ToolAvailable {
+            name: name.clone(),
+            kind: ToolKind::BuildTool,
+            constraint: constraint.clone(),
+            scope: *scope,
+        }),
+        RequirementKind::CodeGenerator {
+            name,
+            constraint,
+            scope,
+        } => Some(Constraint::ToolAvailable {
+            name: name.clone(),
+            kind: ToolKind::CodeGenerator,
+            constraint: constraint.clone(),
+            scope: *scope,
+        }),
         RequirementKind::Port { port, .. } => Some(Constraint::PortAvailable { port: *port }),
         RequirementKind::Service { name, min_version } => Some(Constraint::ServiceRunning {
             service: name.clone(),
@@ -59,10 +84,10 @@ pub fn evaluate_constraint(
     match constraint {
         Constraint::RuntimeVersion {
             runtime,
-            constraint_str,
+            constraint: req_constraint,
         } => {
             if let Some(rt) = machine.find_runtime(runtime) {
-                if matches_version_constraint(&rt.version, constraint_str) {
+                if req_constraint.matches(&rt.version) {
                     EvaluatedConstraint {
                         constraint: constraint.clone(),
                         status: ConstraintStatus::Satisfied,
@@ -72,7 +97,7 @@ pub fn evaluate_constraint(
                 } else {
                     let reason = format!(
                         "Runtime '{}' version {} does not satisfy requirement {}",
-                        runtime, rt.version, constraint_str
+                        runtime, rt.version, req_constraint
                     );
                     let root_cause_hint = format!("{}.version_mismatch", runtime);
                     EvaluatedConstraint {
@@ -88,6 +113,136 @@ pub fn evaluate_constraint(
             } else {
                 let reason = format!("Runtime '{}' is not installed or not in PATH", runtime);
                 let root_cause_hint = format!("{}.missing", runtime);
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Violated {
+                        reason,
+                        root_cause_hint,
+                    },
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            }
+        }
+
+        Constraint::PackageManagerVersion {
+            name,
+            constraint: req_constraint,
+        } => {
+            if let Some(pm) = machine.find_package_manager(name) {
+                if let Some(req_c) = req_constraint {
+                    if let Some(ref ver) = pm.version {
+                        if req_c.matches(ver) {
+                            EvaluatedConstraint {
+                                constraint: constraint.clone(),
+                                status: ConstraintStatus::Satisfied,
+                                project_evidence,
+                                machine_evidence: Some(pm.evidence.clone()),
+                            }
+                        } else {
+                            let reason = format!(
+                                "Package manager '{}' version {} does not satisfy requirement {}",
+                                name, ver, req_c
+                            );
+                            let root_cause_hint = format!("{}.version_mismatch", name);
+                            EvaluatedConstraint {
+                                constraint: constraint.clone(),
+                                status: ConstraintStatus::Violated {
+                                    reason,
+                                    root_cause_hint,
+                                },
+                                project_evidence,
+                                machine_evidence: Some(pm.evidence.clone()),
+                            }
+                        }
+                    } else {
+                        EvaluatedConstraint {
+                            constraint: constraint.clone(),
+                            status: ConstraintStatus::Satisfied,
+                            project_evidence,
+                            machine_evidence: Some(pm.evidence.clone()),
+                        }
+                    }
+                } else {
+                    EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Satisfied,
+                        project_evidence,
+                        machine_evidence: Some(pm.evidence.clone()),
+                    }
+                }
+            } else {
+                let reason = format!(
+                    "Package manager '{}' is not installed or not in PATH",
+                    name
+                );
+                let root_cause_hint = format!("{}.missing", name);
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Violated {
+                        reason,
+                        root_cause_hint,
+                    },
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            }
+        }
+
+        Constraint::ToolAvailable {
+            name,
+            kind,
+            constraint: req_constraint,
+            scope,
+        } => {
+            if let Some(tool) = machine.find_tool(name) {
+                if let Some(req_c) = req_constraint {
+                    if let Some(ref ver) = tool.version {
+                        if req_c.matches(ver) {
+                            EvaluatedConstraint {
+                                constraint: constraint.clone(),
+                                status: ConstraintStatus::Satisfied,
+                                project_evidence,
+                                machine_evidence: Some(tool.evidence.clone()),
+                            }
+                        } else {
+                            let reason = format!(
+                                "{} '{}' version {} does not satisfy requirement {}",
+                                kind, name, ver, req_c
+                            );
+                            let root_cause_hint = format!("{}.version_mismatch", name);
+                            EvaluatedConstraint {
+                                constraint: constraint.clone(),
+                                status: ConstraintStatus::Violated {
+                                    reason,
+                                    root_cause_hint,
+                                },
+                                project_evidence,
+                                machine_evidence: Some(tool.evidence.clone()),
+                            }
+                        }
+                    } else {
+                        EvaluatedConstraint {
+                            constraint: constraint.clone(),
+                            status: ConstraintStatus::Satisfied,
+                            project_evidence,
+                            machine_evidence: Some(tool.evidence.clone()),
+                        }
+                    }
+                } else {
+                    EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Satisfied,
+                        project_evidence,
+                        machine_evidence: Some(tool.evidence.clone()),
+                    }
+                }
+            } else {
+                let reason = format!(
+                    "{} '{}' is not installed or not in PATH (scope: {:?})",
+                    kind, name, scope
+                );
+                let root_cause_hint = format!("{}.missing", name);
                 EvaluatedConstraint {
                     constraint: constraint.clone(),
                     status: ConstraintStatus::Violated {

@@ -1,4 +1,4 @@
-use semver::{Version, VersionReq};
+use semver::VersionReq;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -95,18 +95,12 @@ pub fn parse_version_req(constraint: &str) -> Option<VersionReq> {
     VersionReq::parse(&combined).ok()
 }
 
+pub use unfuck_core::version::*;
+
 /// Check if actual version satisfies constraint requirement.
 pub fn matches_version_constraint(actual: &str, constraint: &str) -> bool {
-    let norm_actual = normalize_semver(actual);
-    let Ok(v) = Version::parse(&norm_actual) else {
-        return false;
-    };
-
-    if let Some(req) = parse_version_req(constraint) {
-        req.matches(&v)
-    } else {
-        false
-    }
+    let parsed = VersionConstraint::parse(constraint);
+    parsed.matches(actual)
 }
 
 #[cfg(test)]
@@ -133,5 +127,29 @@ mod tests {
 
         assert!(matches_version_constraint("3.11.5", ">=3.10, <3.13"));
         assert!(!matches_version_constraint("3.13.0", ">=3.10, <3.13"));
+    }
+
+    #[test]
+    fn test_exact_pin_and_multi_component_versions() {
+        // ==21.0.2 vs 21.0.2 -> satisfied
+        assert!(matches_version_constraint("21.0.2", "==21.0.2"));
+        assert!(matches_version_constraint("21.0.2", "21.0.2"));
+
+        // ==21.0.2 vs 21.0.3 -> violated
+        assert!(!matches_version_constraint("21.0.3", "==21.0.2"));
+        assert!(!matches_version_constraint("21.0.3", "21.0.2"));
+
+        // ==21.0.2 vs 26.0.2.1 -> violated
+        assert!(!matches_version_constraint("26.0.2.1", "==21.0.2"));
+        assert!(!matches_version_constraint("26.0.2.1", "21.0.2"));
+
+        // >=21.0.2 vs 26.0.2.1 -> satisfied
+        assert!(matches_version_constraint("26.0.2.1", ">=21.0.2"));
+
+        // >=21.0.2 AND <27 -> satisfied by 26.0.2.1
+        assert!(matches_version_constraint("26.0.2.1", ">=21.0.2, <27"));
+
+        // >=21.0.2 AND <26 -> violated by 26.0.2.1
+        assert!(!matches_version_constraint("26.0.2.1", ">=21.0.2, <26"));
     }
 }

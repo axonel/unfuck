@@ -6,6 +6,7 @@ pub use evaluator::{evaluate_all, evaluate_constraint, requirement_to_constraint
 pub use model::{Constraint, ConstraintStatus, EvaluatedConstraint};
 pub use version::{
     matches_version_constraint, normalize_semver, parse_version_req, VersionComparator,
+    VersionConstraint,
 };
 
 #[cfg(test)]
@@ -80,6 +81,27 @@ mod tests {
                     "Port 3000 in use",
                 ),
             }],
+            package_managers: vec![unfuck_core::ir::PackageManagerObservation {
+                name: "pnpm".to_string(),
+                version: Some("11.24.0".to_string()),
+                executable_path: PathBuf::from("/usr/bin/pnpm"),
+                evidence: Evidence::from_executable(
+                    PathBuf::from("/usr/bin/pnpm"),
+                    "11.24.0",
+                    "pnpm --version",
+                ),
+            }],
+            tools: vec![unfuck_core::ir::ToolObservation {
+                name: "make".to_string(),
+                kind: unfuck_core::ir::ToolKind::BuildTool,
+                version: Some("4.4.1".to_string()),
+                executable_path: PathBuf::from("/usr/bin/make"),
+                evidence: Evidence::from_executable(
+                    PathBuf::from("/usr/bin/make"),
+                    "GNU Make 4.4.1",
+                    "make --version",
+                ),
+            }],
             env_vars: HashMap::new(),
             path_entries: vec![PathBuf::from("/usr/bin")],
             evidence: vec![],
@@ -91,7 +113,7 @@ mod tests {
         let machine = mock_machine();
         let constraint = Constraint::RuntimeVersion {
             runtime: "python".to_string(),
-            constraint_str: ">= 3.11".to_string(),
+            constraint: VersionConstraint::parse(">= 3.11"),
         };
         let eval = evaluate_constraint(&constraint, &machine, None);
         assert!(eval.is_violated());
@@ -112,10 +134,57 @@ mod tests {
         let machine = mock_machine();
         let constraint = Constraint::RuntimeVersion {
             runtime: "node".to_string(),
-            constraint_str: ">= 20.0.0".to_string(),
+            constraint: VersionConstraint::parse(">= 20.0.0"),
         };
         let eval = evaluate_constraint(&constraint, &machine, None);
         assert!(eval.is_satisfied());
+    }
+
+    #[test]
+    fn test_package_manager_satisfied_and_violated() {
+        let machine = mock_machine();
+        let satisfied = Constraint::PackageManagerVersion {
+            name: "pnpm".to_string(),
+            constraint: Some(VersionConstraint::parse("11.24.0")),
+        };
+        assert!(evaluate_constraint(&satisfied, &machine, None).is_satisfied());
+
+        let violated = Constraint::PackageManagerVersion {
+            name: "pnpm".to_string(),
+            constraint: Some(VersionConstraint::parse("12.0.0")),
+        };
+        assert!(evaluate_constraint(&violated, &machine, None).is_violated());
+
+        let missing = Constraint::PackageManagerVersion {
+            name: "yarn".to_string(),
+            constraint: None,
+        };
+        assert!(evaluate_constraint(&missing, &machine, None).is_violated());
+    }
+
+    #[test]
+    fn test_tool_available_satisfied_and_missing() {
+        let machine = mock_machine();
+        let build_tool = Constraint::ToolAvailable {
+            name: "make".to_string(),
+            kind: unfuck_core::ir::ToolKind::BuildTool,
+            constraint: None,
+            scope: unfuck_core::ir::ToolScope::RequiredForBuild,
+        };
+        assert!(evaluate_constraint(&build_tool, &machine, None).is_satisfied());
+
+        let missing_dev_tool = Constraint::ToolAvailable {
+            name: "terragrunt".to_string(),
+            kind: unfuck_core::ir::ToolKind::DeveloperTool,
+            constraint: Some(VersionConstraint::parse("1.1.1")),
+            scope: unfuck_core::ir::ToolScope::RequiredForTask,
+        };
+        let eval = evaluate_constraint(&missing_dev_tool, &machine, None);
+        assert!(eval.is_violated());
+        if let ConstraintStatus::Violated { reason, .. } = eval.status {
+            assert!(reason.contains("terragrunt"));
+            assert!(reason.contains("RequiredForTask"));
+        }
     }
 
     #[test]
@@ -154,13 +223,14 @@ mod tests {
                 name: "python".to_string(),
                 kind: RequirementKind::Runtime {
                     name: "python".to_string(),
-                    constraint: ">= 3.11".to_string(),
+                    constraint: VersionConstraint::parse(">= 3.11"),
                 },
                 evidence: Evidence::from_repo_file(
                     PathBuf::from("pyproject.toml"),
                     None,
                     "py >= 3.11",
                 ),
+                additional_evidence: vec![],
             },
             ProjectRequirement {
                 name: "port:3000".to_string(),
@@ -173,6 +243,7 @@ mod tests {
                     None,
                     "port 3000",
                 ),
+                additional_evidence: vec![],
             },
         ];
 

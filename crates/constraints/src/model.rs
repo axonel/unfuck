@@ -1,15 +1,29 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use unfuck_core::evidence::Evidence;
+use unfuck_core::ir::{ToolKind, ToolScope};
+use unfuck_core::version::VersionConstraint;
 
 /// Declarative environment constraint.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Constraint {
-    /// Target runtime must satisfy a version constraint expression (e.g. `>= 3.11`).
+    /// Target runtime must satisfy a version constraint expression.
     RuntimeVersion {
         runtime: String,
-        constraint_str: String,
+        constraint: VersionConstraint,
+    },
+    /// A package manager must be available and satisfy an optional version constraint.
+    PackageManagerVersion {
+        name: String,
+        constraint: Option<VersionConstraint>,
+    },
+    /// A developer, build, or codegen tool must be available.
+    ToolAvailable {
+        name: String,
+        kind: ToolKind,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
     },
     /// A required TCP port must not be occupied by another process.
     PortAvailable { port: u16 },
@@ -35,9 +49,32 @@ impl fmt::Display for Constraint {
         match self {
             Self::RuntimeVersion {
                 runtime,
-                constraint_str,
+                constraint,
             } => {
-                write!(f, "Runtime '{}' must satisfy {}", runtime, constraint_str)
+                write!(f, "Runtime '{}' must satisfy {}", runtime, constraint)
+            }
+            Self::PackageManagerVersion { name, constraint } => {
+                if let Some(ref c) = constraint {
+                    write!(f, "Package manager '{}' must satisfy {}", name, c)
+                } else {
+                    write!(f, "Package manager '{}' must be installed", name)
+                }
+            }
+            Self::ToolAvailable {
+                name,
+                kind,
+                constraint,
+                scope,
+            } => {
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" ({})", c))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "{} '{}'{} must be available (scope: {:?})",
+                    kind, name, ver_str, scope
+                )
             }
             Self::PortAvailable { port } => write!(f, "Port {} must be available", port),
             Self::ServiceRunning {
