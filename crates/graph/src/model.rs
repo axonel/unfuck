@@ -29,6 +29,21 @@ pub enum NodeData {
         version: String,
         executable_path: PathBuf,
     },
+    PackageManager {
+        name: String,
+        version: Option<String>,
+        executable_path: PathBuf,
+    },
+    Tool {
+        name: String,
+        version: Option<String>,
+        executable_path: PathBuf,
+    },
+    Container {
+        name: String,
+        image: String,
+        status: unfuck_core::ir::ContainerStatus,
+    },
     Service {
         name: String,
         status: ServiceStatus,

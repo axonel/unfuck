@@ -383,6 +383,10 @@ pub enum EnvVarCategory {
     Required,
     /// Has a default or fallback value provided in template or configuration.
     OptionalWithDefault,
+    /// Intentionally empty value (e.g. KEY="" or KEY='').
+    IntentionallyEmpty,
+    /// Optional configuration variable without default.
+    Optional,
     /// Present in a local configuration file (.env, .env.local).
     ConfiguredLocal,
 }
@@ -428,6 +432,23 @@ pub struct ComposeServiceSpec {
     pub unresolved_interpolations: Vec<String>,
 }
 
+/// Detected template corresponding to a missing environment file.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct EnvFileTemplate {
+    pub missing_path: PathBuf,
+    pub template_path: PathBuf,
+}
+
+/// Deterministic bootstrap action statically discovered from repository setup scripts.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BootstrapAction {
+    pub script_path: PathBuf,
+    pub action_type: String,
+    pub source_template: PathBuf,
+    pub target_file: PathBuf,
+    pub description: String,
+}
+
 /// Specification of a Docker Compose project discovered in the repository.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ComposeProjectSpec {
@@ -438,8 +459,14 @@ pub struct ComposeProjectSpec {
     pub env_files: Vec<PathBuf>,
     #[serde(default)]
     pub missing_env_files: Vec<PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub env_templates: Vec<EnvFileTemplate>,
     #[serde(default)]
     pub unresolved_env_vars: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directly_affected_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitively_blocked_services: Vec<String>,
     pub can_instantiate: bool,
 }
 
@@ -459,6 +486,8 @@ pub struct ProjectManifest {
     pub components: Vec<ProjectComponent>,
     #[serde(default)]
     pub compose_projects: Vec<ComposeProjectSpec>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bootstrap_actions: Vec<BootstrapAction>,
     pub docker_used: bool,
     pub evidence: Vec<Evidence>,
 }
@@ -476,6 +505,7 @@ impl ProjectManifest {
             env_var_specs: Vec::new(),
             components: Vec::new(),
             compose_projects: Vec::new(),
+            bootstrap_actions: Vec::new(),
             docker_used: false,
             evidence: Vec::new(),
         }

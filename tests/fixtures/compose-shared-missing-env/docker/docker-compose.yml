@@ -1,0 +1,14 @@
+name: compose_shared_missing_env
+services:
+  database:
+    container_name: app_postgres
+    image: postgres:16
+    env_file:
+      - .env
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+  redis:
+    container_name: app_redis
+    image: redis:7
+    env_file:
+      - .env

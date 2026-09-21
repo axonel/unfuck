@@ -42,6 +42,7 @@ mod tests {
             env_var_specs: vec![],
             components: vec![],
             compose_projects: vec![],
+            bootstrap_actions: vec![],
             docker_used: false,
             evidence: vec![],
         };

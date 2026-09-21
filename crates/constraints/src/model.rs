@@ -46,9 +46,18 @@ pub enum Constraint {
     ComposeConfigUnresolved {
         compose_file: std::path::PathBuf,
         project_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         service_name: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        directly_affected_services: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        transitively_blocked_services: Vec<String>,
         missing_env_files: Vec<std::path::PathBuf>,
         unresolved_vars: Vec<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        env_templates: Vec<unfuck_core::ir::EnvFileTemplate>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        bootstrap_suggestions: Vec<String>,
     },
     /// A Docker Compose service has container state issues or has not been created.
     ComposeServiceState {

@@ -14,7 +14,8 @@ pub struct EnvDiscovery {
 }
 
 /// Helper to parse key=value lines from an environment file.
-fn parse_env_lines(content: &str) -> Vec<(usize, String, String, bool)> {
+/// Returns: (line_num, key, value, is_comment_required, is_quoted_empty)
+fn parse_env_lines(content: &str) -> Vec<(usize, String, String, bool, bool)> {
     let mut entries = Vec::new();
     for (idx, line) in content.lines().enumerate() {
         let trimmed = line.trim();
@@ -27,15 +28,26 @@ fn parse_env_lines(content: &str) -> Vec<(usize, String, String, bool)> {
         if let Some((key, val_with_comment)) = trimmed.split_once('=') {
             let key = key.trim().to_string();
             // Separate value from inline comment if present
-            let val = val_with_comment
+            let val_raw = val_with_comment
                 .split('#')
                 .next()
-                .unwrap_or(val_with_comment);
-            let val = val.trim().trim_matches('"').trim_matches('\'').to_string();
-            entries.push((idx + 1, key, val, is_comment_required));
+                .unwrap_or(val_with_comment)
+                .trim();
+            let is_quoted_empty = val_raw == "\"\"" || val_raw == "''";
+            let val = val_raw.trim_matches('"').trim_matches('\'').to_string();
+            entries.push((idx + 1, key, val, is_comment_required, is_quoted_empty));
         }
     }
     entries
+}
+
+fn is_secret_credential_key(key: &str) -> bool {
+    let upper = key.to_ascii_uppercase();
+    upper.contains("SECRET")
+        || upper.contains("TOKEN")
+        || upper.contains("PASSWORD")
+        || upper.contains("API_KEY")
+        || upper.contains("AUTH_KEY")
 }
 
 /// Parse PostgreSQL connection URI to extract host and port.
@@ -84,7 +96,7 @@ pub fn analyze_env(root: &Path) -> EnvDiscovery {
                 );
                 evidence.push(ev);
 
-                for (_, key, val, _) in parse_env_lines(&content) {
+                for (_, key, val, _, _) in parse_env_lines(&content) {
                     if !val.is_empty() {
                         local_env_keys.insert(key.clone());
                         env_var_specs.push(EnvVarSpec {
@@ -121,7 +133,9 @@ pub fn analyze_env(root: &Path) -> EnvDiscovery {
             evidence.push(ev);
 
             if let Ok(content) = fs::read_to_string(&path) {
-                for (line_num, key, val, is_required_comment) in parse_env_lines(&content) {
+                for (line_num, key, val, is_required_comment, is_quoted_empty) in
+                    parse_env_lines(&content)
+                {
                     if !env_vars.contains(&key) {
                         env_vars.push(key.clone());
                     }
@@ -129,24 +143,29 @@ pub fn analyze_env(root: &Path) -> EnvDiscovery {
                     // Check if already configured locally
                     let is_configured_local = local_env_keys.contains(&key);
 
-                    // A variable is strictly required if:
-                    // - It has an empty value in template (e.g. SECRET_KEY=) OR explicitly marked required
-                    // - AND it is not already provided in a local .env file
-                    let is_strictly_required =
-                        (val.is_empty() || is_required_comment) && !is_configured_local;
-
-                    let category = if is_configured_local {
-                        EnvVarCategory::ConfiguredLocal
-                    } else if is_strictly_required {
-                        EnvVarCategory::Required
+                    // Determine variable category and whether it is strictly required
+                    let (category, is_strictly_required) = if is_configured_local {
+                        (EnvVarCategory::ConfiguredLocal, false)
+                    } else if is_required_comment {
+                        (EnvVarCategory::Required, true)
+                    } else if is_quoted_empty {
+                        (EnvVarCategory::IntentionallyEmpty, false)
+                    } else if val.is_empty() {
+                        if is_secret_credential_key(&key) {
+                            (EnvVarCategory::Required, true)
+                        } else {
+                            (EnvVarCategory::Optional, false)
+                        }
                     } else {
-                        EnvVarCategory::OptionalWithDefault
+                        (EnvVarCategory::OptionalWithDefault, false)
                     };
 
                     env_var_specs.push(EnvVarSpec {
                         name: key.clone(),
                         category,
-                        default_value: if val.is_empty() {
+                        default_value: if is_quoted_empty {
+                            Some("".to_string())
+                        } else if val.is_empty() {
                             None
                         } else {
                             Some(val.clone())

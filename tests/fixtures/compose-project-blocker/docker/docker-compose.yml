@@ -1,0 +1,15 @@
+services:
+  api:
+    image: myapp/api:1.0
+    env_file:
+      - .env
+  worker:
+    image: myapp/worker:1.0
+    env_file:
+      - .env
+  frontend:
+    image: myapp/frontend:1.0
+    ports:
+      - "3000:3000"
+  metrics:
+    image: prom/prometheus:latest

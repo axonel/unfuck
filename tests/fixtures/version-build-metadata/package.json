@@ -1,0 +1,5 @@
+{
+  "name": "build-metadata-app",
+  "version": "1.0.0",
+  "packageManager": "pnpm@11.10.0+sha512.abcdef1234567890abcdef1234567890abcdef1234567890"
+}

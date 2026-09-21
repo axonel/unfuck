@@ -184,16 +184,58 @@ pub fn print_diagnoses(diagnoses: &[Diagnosis], verbose: bool) {
 
     for (idx, diag) in diagnoses.iter().enumerate() {
         println!("{}. {}", idx + 1, diag.problem.bold().red());
+        let root_cause_display =
+            if let Some(stripped) = diag.root_cause.strip_prefix("missing.env_file:") {
+                format!("missing {}", stripped)
+            } else {
+                diag.root_cause.clone()
+            };
         println!(
             "   Root Cause:          {}",
-            diag.root_cause.bold().yellow()
+            root_cause_display.bold().yellow()
         );
-        println!("   Violated Constraint: {}", diag.violated_constraint);
         println!("   Confidence:          {}", diag.confidence);
-        println!(
-            "   Affected Components: {}",
-            diag.affected_components.join(", ")
-        );
+        if !diag.directly_affected_services.is_empty()
+            || !diag.transitively_blocked_services.is_empty()
+        {
+            if !diag.directly_affected_services.is_empty() {
+                println!(
+                    "   Directly Affected:   {}",
+                    diag.directly_affected_services.join(", ")
+                );
+            }
+            if !diag.transitively_blocked_services.is_empty() {
+                println!(
+                    "   Transitively Blocked:{}",
+                    diag.transitively_blocked_services.join(", ")
+                );
+            }
+        } else if !diag.affected_services.is_empty() {
+            println!(
+                "   Affected Services:   {}",
+                diag.affected_services.join(", ")
+            );
+        } else {
+            println!("   Violated Constraint: {}", diag.violated_constraint);
+            println!(
+                "   Affected Components: {}",
+                diag.affected_components.join(", ")
+            );
+        }
+        if let Some(ref tpl) = diag.configuration_template {
+            println!(
+                "   Configuration template found: {}",
+                tpl.display().to_string().cyan()
+            );
+        }
+        for suggestion in &diag.bootstrap_suggestions {
+            println!("   Bootstrap Action:    {}", suggestion.cyan());
+        }
+        if verbose
+            && (!diag.affected_services.is_empty() || !diag.directly_affected_services.is_empty())
+        {
+            println!("   Violated Constraint: {}", diag.violated_constraint);
+        }
         println!();
         println!("   Causal Chain:");
         for (step_num, step) in diag.causal_chain.iter().enumerate() {

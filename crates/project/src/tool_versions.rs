@@ -150,40 +150,46 @@ pub fn analyze_tool_versions(root: &Path) -> ToolVersionsDiscovery {
         }
     }
 
-    // 2. mise.toml
-    let mise_path = root.join("mise.toml");
-    if mise_path.exists() {
-        if let Ok(content) = fs::read_to_string(&mise_path) {
-            if let Ok(toml) = content.parse::<Value>() {
-                if let Some(tools_table) = toml.get("tools").and_then(|t| t.as_table()) {
-                    for (tool, val) in tools_table {
-                        let ver_str = match val {
-                            Value::String(s) => Some(s.clone()),
-                            Value::Integer(i) => Some(i.to_string()),
-                            Value::Float(f) => Some(f.to_string()),
-                            _ => None,
-                        };
+    // 2. .mise.toml / mise.toml / .mise/config.toml
+    for mise_file in [".mise.toml", "mise.toml", ".mise/config.toml"] {
+        let mise_path = root.join(mise_file);
+        if mise_path.exists() {
+            if let Ok(content) = fs::read_to_string(&mise_path) {
+                if let Ok(toml) = content.parse::<Value>() {
+                    if let Some(tools_table) = toml.get("tools").and_then(|t| t.as_table()) {
+                        for (tool, val) in tools_table {
+                            let ver_str = match val {
+                                Value::String(s) => Some(s.clone()),
+                                Value::Integer(i) => Some(i.to_string()),
+                                Value::Float(f) => Some(f.to_string()),
+                                _ => None,
+                            };
 
-                        if let Some(ver) = ver_str {
-                            let (req_name, kind) = classify_tool(tool, &ver);
+                            if let Some(ver) = ver_str {
+                                let (req_name, kind) = classify_tool(tool, &ver);
 
-                            let ev = Evidence::from_repo_file(
-                                PathBuf::from("mise.toml"),
-                                None,
-                                format!("Tool '{}' version {} declared in mise.toml", tool, ver),
-                            );
+                                let ev = Evidence::from_repo_file(
+                                    PathBuf::from(mise_file),
+                                    None,
+                                    format!(
+                                        "Tool '{}' version {} declared in {}",
+                                        tool, ver, mise_file
+                                    ),
+                                );
 
-                            requirements.push(ProjectRequirement {
-                                name: req_name,
-                                kind,
-                                evidence: ev.clone(),
-                                additional_evidence: Vec::new(),
-                            });
-                            evidence.push(ev);
+                                requirements.push(ProjectRequirement {
+                                    name: req_name,
+                                    kind,
+                                    evidence: ev.clone(),
+                                    additional_evidence: Vec::new(),
+                                });
+                                evidence.push(ev);
+                            }
                         }
                     }
                 }
             }
+            break;
         }
     }
 

@@ -1,3 +1,4 @@
+pub mod bootstrap;
 pub mod docker;
 pub mod env;
 pub mod go;
@@ -415,6 +416,16 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
     // 3. Consolidate requirements and detect conflicts across sources
     let requirements = consolidate_requirements(requirements);
 
+    // 4. Statically analyze bootstrap scripts
+    let bootstrap_actions = bootstrap::analyze_bootstrap(&root_buf);
+    for action in &bootstrap_actions {
+        evidence.push(Evidence::from_repo_file(
+            action.script_path.clone(),
+            None,
+            format!("Bootstrap action discovered: {}", action.description),
+        ));
+    }
+
     let name = root_buf
         .file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -431,6 +442,7 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
         env_var_specs,
         components,
         compose_projects,
+        bootstrap_actions,
         docker_used,
         evidence,
     })

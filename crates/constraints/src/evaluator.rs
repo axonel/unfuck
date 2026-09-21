@@ -484,6 +484,10 @@ pub fn evaluate_constraint(
             service_name,
             missing_env_files,
             unresolved_vars,
+            env_templates: _,
+            directly_affected_services: _,
+            transitively_blocked_services: _,
+            bootstrap_suggestions: _,
         } => {
             let mut reasons = Vec::new();
             if !missing_env_files.is_empty() {
@@ -587,12 +591,25 @@ pub fn requirement_to_constraint_with_project(
                     proj.find_compose_service_for_service(name)
                 {
                     if !compose_proj.can_instantiate {
+                        let bootstrap_suggestions = proj
+                            .bootstrap_actions
+                            .iter()
+                            .map(|b| b.description.clone())
+                            .collect();
                         return Some(Constraint::ComposeConfigUnresolved {
                             compose_file: compose_proj.file_path.clone(),
                             project_name: compose_proj.name.clone(),
-                            service_name: Some(compose_svc.name.clone()),
+                            service_name: None,
                             missing_env_files: compose_proj.missing_env_files.clone(),
                             unresolved_vars: compose_proj.unresolved_env_vars.clone(),
+                            env_templates: compose_proj.env_templates.clone(),
+                            directly_affected_services: compose_proj
+                                .directly_affected_services
+                                .clone(),
+                            transitively_blocked_services: compose_proj
+                                .transitively_blocked_services
+                                .clone(),
+                            bootstrap_suggestions,
                         });
                     }
 
@@ -639,6 +656,41 @@ pub fn evaluate_project(
     machine: &MachineCapability,
 ) -> Vec<EvaluatedConstraint> {
     let mut results = Vec::new();
+    for compose_proj in &project.compose_projects {
+        if !compose_proj.can_instantiate {
+            let bootstrap_suggestions = project
+                .bootstrap_actions
+                .iter()
+                .map(|b| b.description.clone())
+                .collect();
+            let constraint = Constraint::ComposeConfigUnresolved {
+                compose_file: compose_proj.file_path.clone(),
+                project_name: compose_proj.name.clone(),
+                service_name: None,
+                missing_env_files: compose_proj.missing_env_files.clone(),
+                unresolved_vars: compose_proj.unresolved_env_vars.clone(),
+                env_templates: compose_proj.env_templates.clone(),
+                directly_affected_services: compose_proj.directly_affected_services.clone(),
+                transitively_blocked_services: compose_proj.transitively_blocked_services.clone(),
+                bootstrap_suggestions,
+            };
+            if !results
+                .iter()
+                .any(|e: &EvaluatedConstraint| e.constraint == constraint)
+            {
+                let ev = Evidence::from_repo_file(
+                    compose_proj.file_path.clone(),
+                    None,
+                    format!(
+                        "Compose file {} cannot be instantiated",
+                        compose_proj.file_path.display()
+                    ),
+                );
+                let evaluated = evaluate_constraint(&constraint, machine, Some(ev));
+                results.push(evaluated);
+            }
+        }
+    }
     for req in &project.requirements {
         if let Some(constraint) =
             requirement_to_constraint_with_project(req, Some(project), machine)

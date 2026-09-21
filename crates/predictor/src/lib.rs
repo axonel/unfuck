@@ -272,12 +272,15 @@ pub fn predict_failures(
 
                 Constraint::ComposeConfigUnresolved {
                     compose_file,
-                    project_name: _,
-                    service_name,
+                    project_name,
+                    service_name: _,
                     missing_env_files,
                     unresolved_vars,
+                    env_templates: _,
+                    directly_affected_services,
+                    transitively_blocked_services,
+                    bootstrap_suggestions: _,
                 } => {
-                    let target_name = service_name.as_deref().unwrap_or("compose");
                     let mut details = Vec::new();
                     if !missing_env_files.is_empty() {
                         let missing_str = missing_env_files
@@ -290,27 +293,48 @@ pub fn predict_failures(
                     if !unresolved_vars.is_empty() {
                         details.push(format!("unresolved vars: {}", unresolved_vars.join(", ")));
                     }
+
+                    let p_name = project_name.as_deref().unwrap_or_else(|| {
+                        compose_file
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("compose")
+                    });
+
+                    let mut affected_components = Vec::new();
+                    for s in directly_affected_services {
+                        if !affected_components.contains(s) {
+                            affected_components.push(s.clone());
+                        }
+                    }
+                    for s in transitively_blocked_services {
+                        if !affected_components.contains(s) {
+                            affected_components.push(s.clone());
+                        }
+                    }
+                    if affected_components.is_empty() {
+                        affected_components.push("compose".to_string());
+                    }
+                    affected_components.push("docker".to_string());
+
                     let summary = format!(
-                        "Service '{}' defined in '{}' cannot start: {}. Compose project cannot be instantiated.",
-                        target_name,
+                        "Compose project in '{}' cannot be instantiated: {}. Directly affected: [{}]; Transitively blocked: [{}].",
                         compose_file.display(),
-                        details.join("; ")
+                        details.join("; "),
+                        directly_affected_services.join(", "),
+                        transitively_blocked_services.join(", ")
                     );
 
                     predictions.push(Prediction {
                         title: format!(
-                            "Compose service '{}' cannot start: configuration unresolved",
-                            target_name
+                            "Compose project '{}' cannot start: configuration unresolved",
+                            p_name
                         ),
                         category: PredictionCategory::ComposeConfigMissing,
                         summary,
                         confidence: Confidence::High,
                         constraint: eval.constraint.clone(),
-                        affected_components: vec![
-                            target_name.to_string(),
-                            "compose".to_string(),
-                            "docker".to_string(),
-                        ],
+                        affected_components,
                         project_evidence: eval.project_evidence.clone(),
                         machine_evidence: None,
                     });
@@ -323,58 +347,40 @@ pub fn predict_failures(
                     expected_state,
                     actual_state,
                 } => {
+                    let c_str = container_name
+                        .as_deref()
+                        .map(|c| format!(" (container '{}')", c))
+                        .unwrap_or_default();
                     let (category, title, summary) = if actual_state == "not-created" {
                         (
                             PredictionCategory::ComposeServiceBlocked,
+                            format!("Compose service '{}' container not created", service_name),
                             format!(
-                                "Compose service '{}' is not running (container not created)",
-                                service_name
-                            ),
-                            format!(
-                                "Compose service '{}' in '{}' has no active container on the host. Run 'docker compose up -d {}' to create and start it.",
+                                "Service '{}' defined in '{}' has no existing container on host.",
                                 service_name,
-                                compose_file.display(),
-                                service_name
+                                compose_file.display()
                             ),
                         )
                     } else if actual_state.starts_with("exited") {
                         (
                             PredictionCategory::ContainerStopped,
+                            format!("Compose service '{}' container stopped", service_name),
                             format!(
-                                "Compose service '{}' container is stopped ({})",
-                                service_name, actual_state
-                            ),
-                            format!(
-                                "Container for service '{}' in '{}' exists but is {}. Start it with 'docker compose up -d {}'.",
+                                "Container for service '{}'{} defined in '{}' is stopped ({}).",
                                 service_name,
+                                c_str,
                                 compose_file.display(),
-                                actual_state,
-                                service_name
-                            ),
-                        )
-                    } else if actual_state.contains("unhealthy") {
-                        (
-                            PredictionCategory::ContainerUnhealthy,
-                            format!(
-                                "Compose service '{}' container is unhealthy",
-                                service_name
-                            ),
-                            format!(
-                                "Container for service '{}' in '{}' is running but failing health checks.",
-                                service_name,
-                                compose_file.display()
+                                actual_state
                             ),
                         )
                     } else {
                         (
-                            PredictionCategory::ComposeServiceBlocked,
+                            PredictionCategory::ContainerUnhealthy,
+                            format!("Compose service '{}' container unhealthy", service_name),
                             format!(
-                                "Compose service '{}' state mismatch: {}",
-                                service_name, actual_state
-                            ),
-                            format!(
-                                "Compose service '{}' in '{}' is in state '{}', expected '{}'.",
+                                "Container for service '{}'{} defined in '{}' is in state '{}' (expected '{}').",
                                 service_name,
+                                c_str,
                                 compose_file.display(),
                                 actual_state,
                                 expected_state
@@ -408,10 +414,52 @@ pub fn predict_failures(
 
     let mut deduped: Vec<Prediction> = Vec::new();
     for p in predictions {
-        if let Some(existing) = deduped.iter_mut().find(|e| e.constraint == p.constraint) {
+        let is_compose_missing = p.category == PredictionCategory::ComposeConfigMissing;
+        let found_existing = if is_compose_missing {
+            deduped.iter_mut().find(|e| {
+                if e.category == PredictionCategory::ComposeConfigMissing {
+                    match (&e.constraint, &p.constraint) {
+                        (
+                            Constraint::ComposeConfigUnresolved {
+                                compose_file: f1,
+                                missing_env_files: m1,
+                                ..
+                            },
+                            Constraint::ComposeConfigUnresolved {
+                                compose_file: f2,
+                                missing_env_files: m2,
+                                ..
+                            },
+                        ) => f1 == f2 && m1 == m2,
+                        _ => false,
+                    }
+                } else {
+                    false
+                }
+            })
+        } else {
+            deduped.iter_mut().find(|e| e.constraint == p.constraint)
+        };
+
+        if let Some(existing) = found_existing {
             for comp in p.affected_components {
                 if !existing.affected_components.contains(&comp) {
                     existing.affected_components.push(comp);
+                }
+            }
+            if is_compose_missing {
+                let mut services: Vec<String> = existing
+                    .affected_components
+                    .iter()
+                    .filter(|c| c.as_str() != "compose" && c.as_str() != "docker")
+                    .cloned()
+                    .collect();
+                services.sort();
+                if services.len() > 1 {
+                    existing.title = format!(
+                        "Compose configuration unresolved: {} cannot start",
+                        services.join(", ")
+                    );
                 }
             }
         } else {
@@ -442,6 +490,7 @@ mod tests {
             env_var_specs: vec![],
             components: vec![],
             compose_projects: vec![],
+            bootstrap_actions: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -501,6 +550,7 @@ mod tests {
             env_var_specs: vec![],
             components: vec![],
             compose_projects: vec![],
+            bootstrap_actions: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -560,6 +610,7 @@ mod tests {
             env_var_specs: vec![],
             components: vec![],
             compose_projects: vec![],
+            bootstrap_actions: vec![],
             docker_used: false,
             evidence: vec![],
         };

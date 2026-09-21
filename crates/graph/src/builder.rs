@@ -124,14 +124,76 @@ impl EnvironmentGraph {
             port_nodes.insert(p.port, (p_node, p.clone()));
         }
 
-        // 5. Connect known service-to-port dependencies
+        // 5. Package Managers
+        let mut pkg_mgr_nodes = HashMap::new();
+        for pm in &model.machine.package_managers {
+            let pm_node = graph.add_node(NodeData::PackageManager {
+                name: pm.name.clone(),
+                version: pm.version.clone(),
+                executable_path: pm.executable_path.clone(),
+            });
+            graph.add_edge(machine_node, pm_node, EdgeData::Provides);
+
+            let ev_node = graph.add_node(NodeData::Evidence {
+                description: pm.evidence.description.clone(),
+                confidence: pm.evidence.confidence,
+            });
+            graph.add_edge(pm_node, ev_node, EdgeData::SupportedBy);
+            pkg_mgr_nodes.insert(pm.name.to_lowercase(), (pm_node, pm.clone()));
+        }
+
+        // 6. Developer & Build Tools
+        let mut tool_nodes = HashMap::new();
+        for tool in &model.machine.tools {
+            let tool_node = graph.add_node(NodeData::Tool {
+                name: tool.name.clone(),
+                version: tool.version.clone(),
+                executable_path: tool.executable_path.clone(),
+            });
+            graph.add_edge(machine_node, tool_node, EdgeData::Provides);
+
+            let ev_node = graph.add_node(NodeData::Evidence {
+                description: tool.evidence.description.clone(),
+                confidence: tool.evidence.confidence,
+            });
+            graph.add_edge(tool_node, ev_node, EdgeData::SupportedBy);
+            tool_nodes.insert(tool.name.to_lowercase(), (tool_node, tool.clone()));
+        }
+
+        // 7. Containers
+        let mut container_nodes = HashMap::new();
+        for ctr in &model.machine.containers {
+            let primary_name = ctr.names.first().cloned().unwrap_or_else(|| ctr.id.clone());
+            let ctr_node = graph.add_node(NodeData::Container {
+                name: primary_name.clone(),
+                image: ctr.image.clone(),
+                status: ctr.status.clone(),
+            });
+            graph.add_edge(machine_node, ctr_node, EdgeData::Provides);
+
+            let ev_node = graph.add_node(NodeData::Evidence {
+                description: ctr.evidence.description.clone(),
+                confidence: ctr.evidence.confidence,
+            });
+            graph.add_edge(ctr_node, ev_node, EdgeData::SupportedBy);
+            for n in &ctr.names {
+                container_nodes.insert(n.clone(), (ctr_node, ctr.clone()));
+                let clean = n.trim_start_matches('/');
+                container_nodes.insert(clean.to_string(), (ctr_node, ctr.clone()));
+            }
+            if let Some(ref svc) = ctr.compose_service {
+                container_nodes.insert(svc.clone(), (ctr_node, ctr.clone()));
+            }
+        }
+
+        // 8. Connect known service-to-port dependencies
         if let (Some((pg_node, _)), Some((port_node, _))) =
             (service_nodes.get("postgresql"), port_nodes.get(&5432))
         {
             graph.add_edge(*pg_node, *port_node, EdgeData::TargetsPort);
         }
 
-        // 6. Project Requirements and Constraints
+        // 9. Project Requirements and Constraints
         for eval in evaluated_constraints {
             let constraint_node = graph.add_node(NodeData::Constraint {
                 constraint: eval.constraint.clone(),
@@ -242,6 +304,41 @@ impl EnvironmentGraph {
                             EdgeData::EvaluatedAs
                         };
                         graph.add_edge(*rt_node, constraint_node, edge_type);
+                    }
+                }
+                Constraint::PackageManagerVersion { name, .. } => {
+                    if let Some((pm_node, _)) = pkg_mgr_nodes.get(&name.to_lowercase()) {
+                        let edge_type = if eval.is_violated() {
+                            EdgeData::Violates
+                        } else {
+                            EdgeData::EvaluatedAs
+                        };
+                        graph.add_edge(*pm_node, constraint_node, edge_type);
+                    }
+                }
+                Constraint::ToolAvailable { name, .. } => {
+                    if let Some((t_node, _)) = tool_nodes.get(&name.to_lowercase()) {
+                        let edge_type = if eval.is_violated() {
+                            EdgeData::Violates
+                        } else {
+                            EdgeData::EvaluatedAs
+                        };
+                        graph.add_edge(*t_node, constraint_node, edge_type);
+                    }
+                }
+                Constraint::ComposeServiceState {
+                    service_name,
+                    container_name,
+                    ..
+                } => {
+                    let target_name = container_name.as_deref().unwrap_or(service_name);
+                    if let Some((c_node, _)) = container_nodes.get(target_name) {
+                        let edge_type = if eval.is_violated() {
+                            EdgeData::Violates
+                        } else {
+                            EdgeData::EvaluatedAs
+                        };
+                        graph.add_edge(*c_node, constraint_node, edge_type);
                     }
                 }
                 Constraint::PortAvailable { port } => {
@@ -439,6 +536,103 @@ impl EnvironmentGraph {
                                 }
                             }
                         }
+                        Some(NodeData::PackageManager {
+                            name,
+                            version,
+                            executable_path,
+                        }) => {
+                            let ver_str = version.as_deref().unwrap_or("unknown");
+                            machine_state = Some(format!(
+                                "package manager {} {} ({})",
+                                name,
+                                ver_str,
+                                executable_path.display()
+                            ));
+                            for out_edge in
+                                self.graph.edges_directed(source_idx, Direction::Outgoing)
+                            {
+                                if *out_edge.weight() == EdgeData::SupportedBy {
+                                    if let Some(NodeData::Evidence {
+                                        description,
+                                        confidence,
+                                    }) = self.graph.node_weight(out_edge.target())
+                                    {
+                                        machine_evidence = Some(Evidence::new(
+                                            unfuck_core::evidence::EvidenceSource::ExecutableInspection {
+                                                path: executable_path.clone(),
+                                                version_string: ver_str.to_string(),
+                                                exit_code: 0,
+                                            },
+                                            *confidence,
+                                            description.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Some(NodeData::Tool {
+                            name,
+                            version,
+                            executable_path,
+                        }) => {
+                            let ver_str = version.as_deref().unwrap_or("unknown");
+                            machine_state = Some(format!(
+                                "tool {} {} ({})",
+                                name,
+                                ver_str,
+                                executable_path.display()
+                            ));
+                            for out_edge in
+                                self.graph.edges_directed(source_idx, Direction::Outgoing)
+                            {
+                                if *out_edge.weight() == EdgeData::SupportedBy {
+                                    if let Some(NodeData::Evidence {
+                                        description,
+                                        confidence,
+                                    }) = self.graph.node_weight(out_edge.target())
+                                    {
+                                        machine_evidence = Some(Evidence::new(
+                                            unfuck_core::evidence::EvidenceSource::ExecutableInspection {
+                                                path: executable_path.clone(),
+                                                version_string: ver_str.to_string(),
+                                                exit_code: 0,
+                                            },
+                                            *confidence,
+                                            description.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Some(NodeData::Container {
+                            name,
+                            image,
+                            status,
+                        }) => {
+                            machine_state = Some(format!(
+                                "container {} (image: {}, status: {})",
+                                name, image, status
+                            ));
+                            for out_edge in
+                                self.graph.edges_directed(source_idx, Direction::Outgoing)
+                            {
+                                if *out_edge.weight() == EdgeData::SupportedBy {
+                                    if let Some(NodeData::Evidence {
+                                        description,
+                                        confidence,
+                                    }) = self.graph.node_weight(out_edge.target())
+                                    {
+                                        machine_evidence = Some(Evidence::new(
+                                            unfuck_core::evidence::EvidenceSource::DirectObservation {
+                                                detail: format!("container: {} {}", name, image),
+                                            },
+                                            *confidence,
+                                            description.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
@@ -598,47 +792,80 @@ impl EnvironmentGraph {
             Constraint::ComposeConfigUnresolved {
                 compose_file,
                 project_name: _,
-                service_name,
+                service_name: _,
                 missing_env_files,
                 unresolved_vars,
+                env_templates,
+                directly_affected_services,
+                transitively_blocked_services,
+                bootstrap_suggestions,
             } => {
-                let s_name = service_name.as_deref().unwrap_or("compose");
                 let mut steps = Vec::new();
-                steps.push(format!(
-                    "Compose service '{}' is defined in '{}'",
-                    s_name,
-                    compose_file.display()
-                ));
                 if !missing_env_files.is_empty() {
                     let missing_str = missing_env_files
                         .iter()
                         .map(|p| p.display().to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
+                    steps.push(format!("Compose file references {}", missing_str));
+                    steps.push(format!("{} does not exist", missing_str));
+                    for t in env_templates {
+                        steps.push(format!(
+                            "Configuration template found: {}",
+                            t.template_path.display()
+                        ));
+                    }
+                } else {
                     steps.push(format!(
-                        "Missing required environment file(s): {}",
-                        missing_str
+                        "Docker Compose project defined in '{}'",
+                        compose_file.display()
+                    ));
+                }
+                for suggestion in bootstrap_suggestions {
+                    steps.push(format!(
+                        "Deterministic bootstrap action found: {}",
+                        suggestion
                     ));
                 }
                 if !unresolved_vars.is_empty() {
                     steps.push(format!(
-                        "Unresolved required variable(s): {}",
+                        "Required variables cannot be resolved: {}",
                         unresolved_vars.join(", ")
                     ));
+                } else {
+                    steps.push("Required variables cannot be resolved".to_string());
                 }
-                steps.push(
-                    "First violated invariant: Docker Compose configuration must be resolvable to instantiate services"
-                        .to_string(),
-                );
-                steps.push(format!(
-                    "Impact: Compose project cannot be instantiated; '{}' service container cannot be created",
-                    s_name
-                ));
+                steps.push("Compose project cannot be instantiated".to_string());
+                if !directly_affected_services.is_empty() {
+                    steps.push(format!(
+                        "Directly affected services: {}",
+                        directly_affected_services.join(", ")
+                    ));
+                }
+                if !transitively_blocked_services.is_empty() {
+                    steps.push(format!(
+                        "Transitively blocked services: {}",
+                        transitively_blocked_services.join(", ")
+                    ));
+                }
+                let mut all_affected = directly_affected_services.clone();
+                for s in transitively_blocked_services {
+                    if !all_affected.contains(s) {
+                        all_affected.push(s.clone());
+                    }
+                }
+                all_affected.sort();
+                if !all_affected.is_empty() {
+                    steps.push(format!(
+                        "dependent services cannot be created: {}",
+                        all_affected.join(", ")
+                    ));
+                }
 
                 let root_cause = if !missing_env_files.is_empty() {
                     format!("missing.env_file:{}", missing_env_files[0].display())
                 } else {
-                    format!("compose.{}.unresolved_vars", s_name)
+                    "unresolved Compose variables".to_string()
                 };
                 (root_cause, steps)
             }

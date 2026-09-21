@@ -133,6 +133,42 @@ pub fn infer_service_type(name: &str, image: Option<&str>) -> Option<String> {
     }
 }
 
+fn find_env_template(missing_abs: &Path) -> Option<PathBuf> {
+    let parent = missing_abs.parent()?;
+    let file_name = missing_abs
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_default();
+
+    let candidates = if file_name == ".env" {
+        vec![
+            "example.env",
+            ".env.example",
+            ".env.template",
+            ".env.sample",
+            "env.example",
+            ".env.default",
+            ".example.env",
+        ]
+    } else {
+        vec![
+            "example.env",
+            ".env.example",
+            ".env.template",
+            ".env.sample",
+            "env.example",
+        ]
+    };
+
+    for candidate in candidates {
+        let cand_path = parent.join(candidate);
+        if cand_path.is_file() {
+            return Some(cand_path);
+        }
+    }
+    None
+}
+
 fn parse_compose_file(compose_path: &Path, root: &Path) -> Option<ComposeProjectSpec> {
     let content = fs::read_to_string(compose_path).ok()?;
     let doc: serde_yaml::Value = serde_yaml::from_str(&content).ok()?;
@@ -161,8 +197,20 @@ fn parse_compose_file(compose_path: &Path, root: &Path) -> Option<ComposeProject
 
     let mut project_missing_env_files: Vec<PathBuf> = Vec::new();
     let mut project_referenced_env_files: Vec<PathBuf> = Vec::new();
+    let mut project_env_templates: Vec<unfuck_core::ir::EnvFileTemplate> = Vec::new();
     let mut project_unresolved_vars: Vec<String> = Vec::new();
     let mut known_env_keys: HashSet<String> = HashSet::new();
+
+    // Default .env in compose directory or repository root (per Compose spec)
+    let default_env_path = compose_dir.join(".env");
+    if default_env_path.is_file() {
+        known_env_keys.extend(parse_env_file_keys(&default_env_path));
+    } else {
+        let root_env_path = root.join(".env");
+        if root_env_path.is_file() {
+            known_env_keys.extend(parse_env_file_keys(&root_env_path));
+        }
+    }
 
     // Check project-level env_file if any
     if let Some(ef_val) = doc.get("env_file") {
@@ -175,8 +223,23 @@ fn parse_compose_file(compose_path: &Path, root: &Path) -> Option<ComposeProject
             }
             if abs_p.exists() {
                 known_env_keys.extend(parse_env_file_keys(&abs_p));
-            } else if !project_missing_env_files.contains(&proj_rel) {
-                project_missing_env_files.push(proj_rel);
+            } else {
+                if !project_missing_env_files.contains(&proj_rel) {
+                    project_missing_env_files.push(proj_rel.clone());
+                }
+                if let Some(cand_abs) = find_env_template(&abs_p) {
+                    let cand_rel = cand_abs
+                        .strip_prefix(root)
+                        .unwrap_or(&cand_abs)
+                        .to_path_buf();
+                    let match_entry = unfuck_core::ir::EnvFileTemplate {
+                        missing_path: proj_rel,
+                        template_path: cand_rel,
+                    };
+                    if !project_env_templates.contains(&match_entry) {
+                        project_env_templates.push(match_entry);
+                    }
+                }
             }
         };
 
@@ -240,8 +303,23 @@ fn parse_compose_file(compose_path: &Path, root: &Path) -> Option<ComposeProject
                 }
                 if abs_p.exists() {
                     known_env_keys.extend(parse_env_file_keys(&abs_p));
-                } else if !project_missing_env_files.contains(&proj_rel) {
-                    project_missing_env_files.push(proj_rel);
+                } else {
+                    if !project_missing_env_files.contains(&proj_rel) {
+                        project_missing_env_files.push(proj_rel.clone());
+                    }
+                    if let Some(cand_abs) = find_env_template(&abs_p) {
+                        let cand_rel = cand_abs
+                            .strip_prefix(root)
+                            .unwrap_or(&cand_abs)
+                            .to_path_buf();
+                        let match_entry = unfuck_core::ir::EnvFileTemplate {
+                            missing_path: proj_rel,
+                            template_path: cand_rel,
+                        };
+                        if !project_env_templates.contains(&match_entry) {
+                            project_env_templates.push(match_entry);
+                        }
+                    }
                 }
             };
 
@@ -346,13 +424,38 @@ fn parse_compose_file(compose_path: &Path, root: &Path) -> Option<ComposeProject
     let can_instantiate =
         project_missing_env_files.is_empty() && project_unresolved_vars.is_empty();
 
+    let mut directly_affected_services = Vec::new();
+    let mut transitively_blocked_services = Vec::new();
+
+    if !can_instantiate {
+        for svc in &services {
+            let has_missing_env = svc.env_files.iter().any(|ef| {
+                project_missing_env_files.contains(ef)
+                    || project_missing_env_files
+                        .iter()
+                        .any(|m| m.ends_with(ef) || ef.ends_with(m))
+            });
+            let has_unresolved = !svc.unresolved_interpolations.is_empty();
+            if has_missing_env || has_unresolved {
+                directly_affected_services.push(svc.name.clone());
+            } else {
+                transitively_blocked_services.push(svc.name.clone());
+            }
+        }
+        directly_affected_services.sort();
+        transitively_blocked_services.sort();
+    }
+
     Some(ComposeProjectSpec {
         file_path: rel_compose_path,
         name: project_name,
         services,
         env_files: project_referenced_env_files,
         missing_env_files: project_missing_env_files,
+        env_templates: project_env_templates,
         unresolved_env_vars: project_unresolved_vars,
+        directly_affected_services,
+        transitively_blocked_services,
         can_instantiate,
     })
 }
@@ -629,6 +732,18 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                         env_vars.push(var.clone());
                     }
                 }
+            }
+
+            for tmpl in &project_spec.env_templates {
+                let ev_tmpl = Evidence::from_repo_file(
+                    tmpl.template_path.clone(),
+                    None,
+                    format!(
+                        "Configuration template found for missing environment file '{}'",
+                        tmpl.missing_path.display()
+                    ),
+                );
+                evidence.push(ev_tmpl);
             }
 
             compose_projects.push(project_spec);

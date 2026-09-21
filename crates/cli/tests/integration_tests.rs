@@ -747,3 +747,259 @@ fn test_fixture_g_multi_component_java_attribution() {
         "Causal step must name mobile component"
     );
 }
+
+#[test]
+fn test_compose_shared_missing_env_deduplication() {
+    let fixture_path = fixtures_dir().join("compose-shared-missing-env");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-shared-missing-env");
+
+    assert_eq!(manifest.compose_projects.len(), 1);
+    let cp = &manifest.compose_projects[0];
+    assert_eq!(cp.services.len(), 2);
+
+    let machine = unfuck_core::ir::MachineCapability::default();
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let env_model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let predictions = unfuck_predictor::predict_failures(&env_model, &evaluated);
+
+    let graph = unfuck_graph::EnvironmentGraph::build(&env_model, &evaluated);
+    let traces = graph.all_causal_traces();
+    let diagnoses = unfuck_diagnosis::diagnose_all(&predictions, &traces);
+
+    let compose_diags: Vec<_> = diagnoses
+        .iter()
+        .filter(|d| d.root_cause.contains("missing.env_file"))
+        .collect();
+    assert_eq!(
+        compose_diags.len(),
+        1,
+        "Shared missing .env must produce exactly ONE deduplicated diagnosis"
+    );
+
+    let diag = compose_diags[0];
+    assert_eq!(diag.problem, "Compose configuration unresolved");
+    assert_eq!(diag.root_cause, "missing.env_file:docker/.env");
+    assert_eq!(
+        diag.affected_services,
+        vec!["database".to_string(), "redis".to_string()]
+    );
+    assert_eq!(
+        diag.configuration_template,
+        Some(std::path::PathBuf::from("docker/example.env"))
+    );
+
+    assert!(diag
+        .causal_chain
+        .iter()
+        .any(|c| c.contains("Compose file references docker/.env")));
+    assert!(diag
+        .causal_chain
+        .iter()
+        .any(|c| c.contains("docker/.env does not exist")));
+    assert!(diag
+        .causal_chain
+        .iter()
+        .any(|c| c.contains("Configuration template found: docker/example.env")));
+    assert!(diag
+        .causal_chain
+        .iter()
+        .any(|c| c.contains("Compose project cannot be instantiated")));
+    assert!(diag
+        .causal_chain
+        .iter()
+        .any(|c| c.contains("dependent services cannot be created: database, redis")));
+}
+
+#[test]
+fn test_compose_env_template_detection() {
+    let fixture_path = fixtures_dir().join("compose-shared-missing-env");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-shared-missing-env");
+
+    let cp = &manifest.compose_projects[0];
+    assert_eq!(cp.env_templates.len(), 1);
+    assert_eq!(
+        cp.env_templates[0].missing_path,
+        std::path::PathBuf::from("docker/.env")
+    );
+    assert_eq!(
+        cp.env_templates[0].template_path,
+        std::path::PathBuf::from("docker/example.env")
+    );
+
+    let template_evidence = manifest
+        .evidence
+        .iter()
+        .find(|e| e.description.contains("Configuration template found"));
+    assert!(
+        template_evidence.is_some(),
+        "Manifest evidence must record the discovered configuration template"
+    );
+    assert!(template_evidence
+        .unwrap()
+        .description
+        .contains("docker/.env"));
+}
+
+#[test]
+fn test_fixture_compose_project_blocker() {
+    let fixture_path = fixtures_dir().join("compose-project-blocker");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-project-blocker");
+
+    assert_eq!(manifest.compose_projects.len(), 1);
+    let cp = &manifest.compose_projects[0];
+    assert!(!cp.can_instantiate);
+    assert_eq!(
+        cp.directly_affected_services,
+        vec!["api".to_string(), "worker".to_string()]
+    );
+    assert_eq!(
+        cp.transitively_blocked_services,
+        vec!["frontend".to_string(), "metrics".to_string()]
+    );
+
+    assert!(
+        manifest
+            .bootstrap_actions
+            .iter()
+            .any(|b| b.description.contains("setup.sh copies")),
+        "Bootstrap action from setup.sh must be recognized"
+    );
+
+    let machine = unfuck_core::ir::MachineCapability::default();
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let env_model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let predictions = unfuck_predictor::predict_failures(&env_model, &evaluated);
+    let graph = unfuck_graph::EnvironmentGraph::build(&env_model, &evaluated);
+    let traces = graph.all_causal_traces();
+    let diagnoses = unfuck_diagnosis::diagnose_all(&predictions, &traces);
+
+    let compose_diags: Vec<_> = diagnoses
+        .iter()
+        .filter(|d| d.problem == "Compose configuration unresolved")
+        .collect();
+    assert_eq!(
+        compose_diags.len(),
+        1,
+        "Must produce exactly one project-level compose diagnosis"
+    );
+    let diag = compose_diags[0];
+    assert_eq!(
+        diag.directly_affected_services,
+        vec!["api".to_string(), "worker".to_string()]
+    );
+    assert_eq!(
+        diag.transitively_blocked_services,
+        vec!["frontend".to_string(), "metrics".to_string()]
+    );
+    assert!(
+        diag.bootstrap_suggestions
+            .iter()
+            .any(|s| s.contains("setup.sh copies")),
+        "Diagnosis must include bootstrap action suggestion"
+    );
+}
+
+#[test]
+fn test_fixture_version_build_metadata() {
+    let fixture_path = fixtures_dir().join("version-build-metadata");
+    let manifest = analyze_project(&fixture_path).expect("analyze version-build-metadata");
+
+    let pm_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "pnpm")
+        .expect("pnpm requirement");
+
+    match &pm_req.kind {
+        unfuck_core::ir::RequirementKind::PackageManager { constraint, .. } => {
+            let c = constraint.as_ref().expect("pnpm constraint");
+            assert_eq!(c.to_string(), "==11.10.0");
+            assert!(
+                c.matches("11.10.0"),
+                "Exact pin 11.10.0 must match host version 11.10.0"
+            );
+            assert!(
+                !c.matches("11.24.0"),
+                "Exact pin 11.10.0 must not match 11.24.0"
+            );
+        }
+        _ => panic!("Expected PackageManager requirement"),
+    }
+}
+
+#[test]
+fn test_fixture_env_template_optional_vars() {
+    let fixture_path = fixtures_dir().join("env-template-optional-vars");
+    let manifest = analyze_project(&fixture_path).expect("analyze env-template-optional-vars");
+
+    let secret_spec = manifest
+        .env_var_specs
+        .iter()
+        .find(|s| s.name == "SECRET_KEY")
+        .expect("SECRET_KEY spec");
+    assert_eq!(
+        secret_spec.category,
+        unfuck_core::ir::EnvVarCategory::Required
+    );
+
+    let proxy_spec = manifest
+        .env_var_specs
+        .iter()
+        .find(|s| s.name == "OPTIONAL_PROXY")
+        .expect("OPTIONAL_PROXY spec");
+    assert_eq!(
+        proxy_spec.category,
+        unfuck_core::ir::EnvVarCategory::IntentionallyEmpty
+    );
+    assert_eq!(proxy_spec.default_value.as_deref(), Some(""));
+
+    let prefix_spec = manifest
+        .env_var_specs
+        .iter()
+        .find(|s| s.name == "APP_PREFIX")
+        .expect("APP_PREFIX spec");
+    assert_eq!(
+        prefix_spec.category,
+        unfuck_core::ir::EnvVarCategory::IntentionallyEmpty
+    );
+    assert_eq!(prefix_spec.default_value.as_deref(), Some(""));
+
+    let debug_spec = manifest
+        .env_var_specs
+        .iter()
+        .find(|s| s.name == "DEBUG")
+        .expect("DEBUG spec");
+    assert_eq!(
+        debug_spec.category,
+        unfuck_core::ir::EnvVarCategory::OptionalWithDefault
+    );
+    assert_eq!(debug_spec.default_value.as_deref(), Some("false"));
+
+    let req_env_count = manifest
+        .requirements
+        .iter()
+        .filter(|r| {
+            matches!(
+                &r.kind,
+                unfuck_core::ir::RequirementKind::EnvVar { required: true, .. }
+            )
+        })
+        .count();
+    assert_eq!(
+        req_env_count, 1,
+        "Only SECRET_KEY should be a required env var constraint"
+    );
+}
+
+#[test]
+fn test_fixture_bootstrap_copy_template() {
+    let fixture_path = fixtures_dir().join("bootstrap-copy-template");
+    let manifest = analyze_project(&fixture_path).expect("analyze bootstrap-copy-template");
+
+    assert!(
+        manifest.bootstrap_actions.iter().any(|b| b
+            .description
+            .contains("Makefile copies .env.example to .env")),
+        "Bootstrap action from Makefile must be recognized"
+    );
+}

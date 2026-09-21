@@ -14,13 +14,23 @@ pub struct Diagnosis {
     pub violated_constraint: String,
     pub confidence: Confidence,
     pub affected_components: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub affected_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub directly_affected_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub transitively_blocked_services: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub configuration_template: Option<std::path::PathBuf>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub bootstrap_suggestions: Vec<String>,
     pub project_evidence: Option<Evidence>,
     pub machine_evidence: Option<Evidence>,
 }
 
 /// Generates deterministic root-cause diagnoses from predictions and graph causal traces.
 pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<Diagnosis> {
-    let mut diagnoses = Vec::new();
+    let mut diagnoses: Vec<Diagnosis> = Vec::new();
 
     for pred in predictions {
         let matching_trace = traces.iter().find(|t| t.constraint == pred.constraint);
@@ -216,44 +226,80 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
             Constraint::ComposeConfigUnresolved {
                 compose_file,
                 project_name: _,
-                service_name,
+                service_name: _,
                 missing_env_files,
                 unresolved_vars,
+                env_templates,
+                directly_affected_services,
+                transitively_blocked_services,
+                bootstrap_suggestions,
             } => {
-                let s_name = service_name.as_deref().unwrap_or("compose");
                 let mut chain = Vec::new();
-                chain.push(format!(
-                    "Project specification: defines Compose service '{}' in '{}'",
-                    s_name,
-                    compose_file.display()
-                ));
                 if !missing_env_files.is_empty() {
                     let missing_str = missing_env_files
                         .iter()
                         .map(|p| p.display().to_string())
                         .collect::<Vec<_>>()
                         .join(", ");
+                    chain.push(format!("Compose file references {}", missing_str));
+                    chain.push(format!("{} does not exist", missing_str));
+                    for t in env_templates {
+                        chain.push(format!(
+                            "Configuration template found: {}",
+                            t.template_path.display()
+                        ));
+                    }
+                } else {
                     chain.push(format!(
-                        "Configuration defect: required environment file(s) missing: {}",
-                        missing_str
+                        "Docker Compose project defined in '{}'",
+                        compose_file.display()
+                    ));
+                }
+                for suggestion in bootstrap_suggestions {
+                    chain.push(format!(
+                        "Deterministic bootstrap action found: {}",
+                        suggestion
                     ));
                 }
                 if !unresolved_vars.is_empty() {
                     chain.push(format!(
-                        "Unresolved variable(s): {}",
+                        "Required variables cannot be resolved: {}",
                         unresolved_vars.join(", ")
                     ));
+                } else {
+                    chain.push("Required variables cannot be resolved".to_string());
                 }
-                chain.push("Violated invariant: compose_config.is_resolvable()".to_string());
-                chain.push(format!(
-                    "Downstream impact: Docker Compose cannot instantiate the stack; service '{}' container cannot be started",
-                    s_name
-                ));
+                chain.push("Compose project cannot be instantiated".to_string());
+                if !directly_affected_services.is_empty() {
+                    chain.push(format!(
+                        "Directly affected services: {}",
+                        directly_affected_services.join(", ")
+                    ));
+                }
+                if !transitively_blocked_services.is_empty() {
+                    chain.push(format!(
+                        "Transitively blocked services: {}",
+                        transitively_blocked_services.join(", ")
+                    ));
+                }
+                let mut all_affected = directly_affected_services.clone();
+                for s in transitively_blocked_services {
+                    if !all_affected.contains(s) {
+                        all_affected.push(s.clone());
+                    }
+                }
+                all_affected.sort();
+                if !all_affected.is_empty() {
+                    chain.push(format!(
+                        "dependent services cannot be created: {}",
+                        all_affected.join(", ")
+                    ));
+                }
 
                 let root_cause = if !missing_env_files.is_empty() {
                     format!("missing.env_file:{}", missing_env_files[0].display())
                 } else {
-                    format!("compose.{}.unresolved_vars", s_name)
+                    "unresolved Compose variables".to_string()
                 };
                 (root_cause, chain)
             }
@@ -294,7 +340,7 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
             .and_then(|t| t.root_cause.clone())
             .unwrap_or(root_cause);
 
-        let final_causal_chain = matching_trace
+        let mut final_causal_chain = matching_trace
             .filter(|t| !t.causal_steps.is_empty())
             .map(|t| t.causal_steps.clone())
             .unwrap_or(causal_chain);
@@ -307,13 +353,137 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
             Vec::new()
         };
 
+        let mut affected_services = Vec::new();
+        let mut directly_affected_services = Vec::new();
+        let mut transitively_blocked_services = Vec::new();
+        let mut bootstrap_suggestions = Vec::new();
+        let mut configuration_template = None;
+
+        if let Constraint::ComposeConfigUnresolved {
+            service_name,
+            env_templates,
+            directly_affected_services: direct,
+            transitively_blocked_services: transitive,
+            bootstrap_suggestions: bootstrap,
+            ..
+        } = &pred.constraint
+        {
+            if let Some(s) = service_name {
+                affected_services.push(s.clone());
+            }
+            for s in direct {
+                if !directly_affected_services.contains(s) {
+                    directly_affected_services.push(s.clone());
+                }
+                if !affected_services.contains(s) {
+                    affected_services.push(s.clone());
+                }
+            }
+            for s in transitive {
+                if !transitively_blocked_services.contains(s) {
+                    transitively_blocked_services.push(s.clone());
+                }
+                if !affected_services.contains(s) {
+                    affected_services.push(s.clone());
+                }
+            }
+            for b in bootstrap {
+                if !bootstrap_suggestions.contains(b) {
+                    bootstrap_suggestions.push(b.clone());
+                }
+            }
+            for comp in &pred.affected_components {
+                if comp != "compose" && comp != "docker" && !affected_services.contains(comp) {
+                    affected_services.push(comp.clone());
+                }
+            }
+            affected_services.sort();
+            directly_affected_services.sort();
+            transitively_blocked_services.sort();
+            if let Some(t) = env_templates.first() {
+                configuration_template = Some(t.template_path.clone());
+            }
+        }
+
+        let is_compose_unresolved = pred.category
+            == unfuck_predictor::PredictionCategory::ComposeConfigMissing
+            || matches!(&pred.constraint, Constraint::ComposeConfigUnresolved { .. });
+
+        let problem_title = if is_compose_unresolved {
+            "Compose configuration unresolved".to_string()
+        } else {
+            pred.title.clone()
+        };
+
+        if is_compose_unresolved {
+            if let Some(existing) = diagnoses
+                .iter_mut()
+                .find(|d| d.root_cause == final_root_cause)
+            {
+                for s in affected_services {
+                    if !existing.affected_services.contains(&s) {
+                        existing.affected_services.push(s);
+                    }
+                }
+                for s in directly_affected_services {
+                    if !existing.directly_affected_services.contains(&s) {
+                        existing.directly_affected_services.push(s);
+                    }
+                }
+                for s in transitively_blocked_services {
+                    if !existing.transitively_blocked_services.contains(&s) {
+                        existing.transitively_blocked_services.push(s);
+                    }
+                }
+                for b in bootstrap_suggestions {
+                    if !existing.bootstrap_suggestions.contains(&b) {
+                        existing.bootstrap_suggestions.push(b);
+                    }
+                }
+                existing.affected_services.sort();
+                existing.directly_affected_services.sort();
+                existing.transitively_blocked_services.sort();
+                for c in &affected_components {
+                    if !existing.affected_components.contains(c) {
+                        existing.affected_components.push(c.clone());
+                    }
+                }
+                if existing.configuration_template.is_none() {
+                    existing.configuration_template = configuration_template;
+                }
+                existing.problem = "Compose configuration unresolved".to_string();
+
+                continue;
+            }
+        }
+
+        if let Some(ref tpl) = configuration_template {
+            let tpl_step = format!("Configuration template found: {}", tpl.display());
+            if !final_causal_chain
+                .iter()
+                .any(|s| s.contains("Configuration template found"))
+            {
+                if let Some(pos) = final_causal_chain
+                    .iter()
+                    .position(|s| s.ends_with("does not exist"))
+                {
+                    final_causal_chain.insert(pos + 1, tpl_step);
+                }
+            }
+        }
+
         diagnoses.push(Diagnosis {
-            problem: pred.title.clone(),
+            problem: problem_title,
             root_cause: final_root_cause,
             causal_chain: final_causal_chain,
             violated_constraint: pred.constraint.to_string(),
             confidence: pred.confidence,
             affected_components,
+            affected_services,
+            directly_affected_services,
+            transitively_blocked_services,
+            configuration_template,
+            bootstrap_suggestions,
             project_evidence: pred.project_evidence.clone(),
             machine_evidence: pred.machine_evidence.clone(),
         });

@@ -60,14 +60,24 @@ impl fmt::Display for VersionConstraint {
     }
 }
 
+/// Separates a version string into semantic version and optional build/integrity metadata (SemVer 2.0 §10).
+pub fn split_version_and_metadata(s: &str) -> (&str, Option<&str>) {
+    if let Some((ver, meta)) = s.split_once('+') {
+        (ver.trim(), Some(meta.trim()))
+    } else {
+        (s.trim(), None)
+    }
+}
+
 /// Extract numeric dot/dash-separated version components from any string (e.g. "26.0.2.1", "v1.2.3").
 pub fn parse_version_components(ver_str: &str) -> Vec<u64> {
-    let clean = ver_str
+    let (ver_no_meta, _) = split_version_and_metadata(ver_str);
+    let clean = ver_no_meta
         .trim()
         .trim_start_matches(|c: char| !c.is_ascii_digit());
 
     let mut components = Vec::new();
-    for part in clean.split(['.', '-', '_', '+']) {
+    for part in clean.split(['.', '-', '_']) {
         let num_part: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(num) = num_part.parse::<u64>() {
             components.push(num);
@@ -95,8 +105,10 @@ pub fn compare_version_components(a: &[u64], b: &[u64]) -> Ordering {
 impl VersionConstraint {
     /// Parse a raw constraint string into a structured `VersionConstraint`.
     /// When a version has no operator prefix (e.g. "21.0.2" or "11.24.0"), it is treated as an exact pin `==`.
+    /// Build/integrity metadata (e.g. `+sha512...` or `+build.1`) is separated and ignored for version comparison.
     pub fn parse(s: &str) -> Self {
-        let trimmed = s.trim();
+        let (ver_clean, _) = split_version_and_metadata(s);
+        let trimmed = ver_clean.trim();
         if trimmed.is_empty() || trimmed == "*" {
             return Self::Any;
         }
@@ -113,16 +125,18 @@ impl VersionConstraint {
 
             if parts.len() == 2 {
                 let parse_op_ver = |p: &str| -> Option<(VersionComparator, String)> {
-                    if let Some(rest) = p.strip_prefix(">=") {
+                    let (clean_p, _) = split_version_and_metadata(p);
+                    if let Some(rest) = clean_p.strip_prefix(">=") {
                         Some((VersionComparator::GreaterEqual, rest.trim().to_string()))
-                    } else if let Some(rest) = p.strip_prefix('>') {
+                    } else if let Some(rest) = clean_p.strip_prefix('>') {
                         Some((VersionComparator::Greater, rest.trim().to_string()))
-                    } else if let Some(rest) = p.strip_prefix("<=") {
+                    } else if let Some(rest) = clean_p.strip_prefix("<=") {
                         Some((VersionComparator::LessEqual, rest.trim().to_string()))
-                    } else if let Some(rest) = p.strip_prefix('<') {
+                    } else if let Some(rest) = clean_p.strip_prefix('<') {
                         Some((VersionComparator::Less, rest.trim().to_string()))
                     } else {
-                        p.strip_prefix("==")
+                        clean_p
+                            .strip_prefix("==")
                             .map(|rest| (VersionComparator::Exact, rest.trim().to_string()))
                     }
                 };
@@ -171,95 +185,91 @@ impl VersionConstraint {
 
     /// Check if actual version satisfies this constraint.
     pub fn matches(&self, actual_str: &str) -> bool {
+        let (actual_clean, _) = split_version_and_metadata(actual_str);
         match self {
             Self::Any => true,
             Self::Exact(expected) => {
-                let actual_comp = parse_version_components(actual_str);
+                let actual_comp = parse_version_components(actual_clean);
                 let expected_comp = parse_version_components(expected);
                 if !actual_comp.is_empty() && !expected_comp.is_empty() {
-                    compare_version_components(&actual_comp, &expected_comp) == Ordering::Equal
+                    let comps_eq =
+                        compare_version_components(&actual_comp, &expected_comp) == Ordering::Equal;
+                    if comps_eq {
+                        if actual_clean.contains('-') || expected.contains('-') {
+                            actual_clean.trim().eq_ignore_ascii_case(expected.trim())
+                        } else {
+                            true
+                        }
+                    } else {
+                        false
+                    }
                 } else {
-                    actual_str.trim().eq_ignore_ascii_case(expected.trim())
+                    actual_clean.trim().eq_ignore_ascii_case(expected.trim())
                 }
             }
             Self::GreaterEqual(expected) => {
-                let actual_comp = parse_version_components(actual_str);
+                let actual_comp = parse_version_components(actual_clean);
                 let expected_comp = parse_version_components(expected);
                 if !actual_comp.is_empty() && !expected_comp.is_empty() {
                     compare_version_components(&actual_comp, &expected_comp) != Ordering::Less
                 } else {
-                    actual_str.trim() >= expected.trim()
+                    actual_clean.trim() >= expected.trim()
                 }
             }
             Self::Greater(expected) => {
-                let actual_comp = parse_version_components(actual_str);
+                let actual_comp = parse_version_components(actual_clean);
                 let expected_comp = parse_version_components(expected);
                 if !actual_comp.is_empty() && !expected_comp.is_empty() {
                     compare_version_components(&actual_comp, &expected_comp) == Ordering::Greater
                 } else {
-                    actual_str.trim() > expected.trim()
+                    actual_clean.trim() > expected.trim()
                 }
             }
             Self::LessEqual(expected) => {
-                let actual_comp = parse_version_components(actual_str);
+                let actual_comp = parse_version_components(actual_clean);
                 let expected_comp = parse_version_components(expected);
                 if !actual_comp.is_empty() && !expected_comp.is_empty() {
                     compare_version_components(&actual_comp, &expected_comp) != Ordering::Greater
                 } else {
-                    actual_str.trim() <= expected.trim()
+                    actual_clean.trim() <= expected.trim()
                 }
             }
             Self::Less(expected) => {
-                let actual_comp = parse_version_components(actual_str);
+                let actual_comp = parse_version_components(actual_clean);
                 let expected_comp = parse_version_components(expected);
                 if !actual_comp.is_empty() && !expected_comp.is_empty() {
                     compare_version_components(&actual_comp, &expected_comp) == Ordering::Less
                 } else {
-                    actual_str.trim() < expected.trim()
+                    actual_clean.trim() < expected.trim()
                 }
             }
             Self::Compatible(expected) => {
-                let actual_comp = parse_version_components(actual_str);
+                let actual_comp = parse_version_components(actual_clean);
                 let expected_comp = parse_version_components(expected);
-                if !actual_comp.is_empty() && !expected_comp.is_empty() {
-                    // Caret: major versions must match, and actual >= expected
-                    actual_comp[0] == expected_comp[0]
-                        && compare_version_components(&actual_comp, &expected_comp)
-                            != Ordering::Less
-                } else {
-                    actual_str.trim() == expected.trim()
+                if actual_comp.is_empty() || expected_comp.is_empty() {
+                    return actual_clean.trim().starts_with(expected.trim());
                 }
+                let exp_major = expected_comp.first().copied().unwrap_or(0);
+                let act_major = actual_comp.first().copied().unwrap_or(0);
+                if exp_major != act_major {
+                    return false;
+                }
+                compare_version_components(&actual_comp, &expected_comp) != Ordering::Less
             }
             Self::Range { lower, upper } => {
-                let lower_matches = match lower.0 {
-                    VersionComparator::GreaterEqual => {
-                        let actual_comp = parse_version_components(actual_str);
-                        let expected_comp = parse_version_components(&lower.1);
-                        compare_version_components(&actual_comp, &expected_comp) != Ordering::Less
-                    }
-                    VersionComparator::Greater => {
-                        let actual_comp = parse_version_components(actual_str);
-                        let expected_comp = parse_version_components(&lower.1);
-                        compare_version_components(&actual_comp, &expected_comp)
-                            == Ordering::Greater
-                    }
-                    _ => true,
+                let lower_c = match lower.0 {
+                    VersionComparator::GreaterEqual => Self::GreaterEqual(lower.1.clone()),
+                    VersionComparator::Greater => Self::Greater(lower.1.clone()),
+                    VersionComparator::Exact => Self::Exact(lower.1.clone()),
+                    _ => Self::Any,
                 };
-                let upper_matches = match upper.0 {
-                    VersionComparator::LessEqual => {
-                        let actual_comp = parse_version_components(actual_str);
-                        let expected_comp = parse_version_components(&upper.1);
-                        compare_version_components(&actual_comp, &expected_comp)
-                            != Ordering::Greater
-                    }
-                    VersionComparator::Less => {
-                        let actual_comp = parse_version_components(actual_str);
-                        let expected_comp = parse_version_components(&upper.1);
-                        compare_version_components(&actual_comp, &expected_comp) == Ordering::Less
-                    }
-                    _ => true,
+                let upper_c = match upper.0 {
+                    VersionComparator::LessEqual => Self::LessEqual(upper.1.clone()),
+                    VersionComparator::Less => Self::Less(upper.1.clone()),
+                    VersionComparator::Exact => Self::Exact(upper.1.clone()),
+                    _ => Self::Any,
                 };
-                lower_matches && upper_matches
+                lower_c.matches(actual_clean) && upper_c.matches(actual_clean)
             }
         }
     }
@@ -381,5 +391,37 @@ mod tests {
         let conflict1 = VersionConstraint::parse(">=22.0.0");
         let conflict2 = VersionConstraint::parse("20.0.0");
         assert!(conflict1.intersect(&conflict2).is_err());
+    }
+
+    #[test]
+    fn test_build_metadata_separation() {
+        let req = VersionConstraint::parse("11.10.0+sha512.0b7f8b98060031904c017e3a41eb187a16d40eeb829b95c4f8cb03681761fc4ab53dd219115b9b447f4dce1a05a214764461e7d3703392a9f32f9511ce8c86c8");
+        assert_eq!(req, VersionConstraint::Exact("11.10.0".to_string()));
+        assert!(req.matches("11.10.0"));
+        assert!(req.matches("11.10.0+differenthash"));
+        assert!(!req.matches("11.24.0"));
+
+        let range = VersionConstraint::parse(">=1.0.0+build.1");
+        assert_eq!(range, VersionConstraint::GreaterEqual("1.0.0".to_string()));
+        assert!(range.matches("1.0.0"));
+        assert!(range.matches("2.0.0"));
+    }
+
+    #[test]
+    fn test_prerelease_identifiers() {
+        let exact_prerelease = VersionConstraint::parse("1.2.3-alpha.1");
+        assert_eq!(
+            exact_prerelease,
+            VersionConstraint::Exact("1.2.3-alpha.1".to_string())
+        );
+        assert!(exact_prerelease.matches("1.2.3-alpha.1"));
+        assert!(exact_prerelease.matches("1.2.3-alpha.1+sha512.abc"));
+        // Prerelease must not match plain release or different prerelease
+        assert!(!exact_prerelease.matches("1.2.3"));
+        assert!(!exact_prerelease.matches("1.2.3-alpha.2"));
+
+        let exact_release = VersionConstraint::parse("1.2.3");
+        assert!(exact_release.matches("1.2.3"));
+        assert!(!exact_release.matches("1.2.3-alpha.1"));
     }
 }
