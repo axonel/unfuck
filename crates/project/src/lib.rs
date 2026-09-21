@@ -6,138 +6,219 @@ pub mod python;
 pub mod rust;
 pub mod tool_versions;
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use unfuck_core::error::Result;
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectComponent, ProjectManifest, ProjectRequirement, RequirementKind};
 use unfuck_core::Confidence;
+pub use unfuck_core::VersionConstraint;
 
-/// Check if two version constraints conflict (e.g. ">=20" / "20" vs ">=22" or "<20" vs ">=20").
-fn are_constraints_conflicting(c1: &str, c2: &str) -> bool {
-    // Basic normalization
-    let norm = |s: &str| -> String {
-        s.trim()
-            .trim_start_matches('v')
-            .trim_start_matches('=')
-            .to_string()
-    };
-
-    let s1 = norm(c1);
-    let s2 = norm(c2);
-
-    // If exact versions and not equal, conflict
-    if let (Ok(v1), Ok(v2)) = (semver::Version::parse(&s1), semver::Version::parse(&s2)) {
-        return v1 != v2;
-    }
-
-    // Check if one is exact number (e.g. "20" or "20.0.0") and other is ">=22"
-    let extract_major = |s: &str| -> Option<u32> {
-        let clean = s.trim_start_matches(['>', '=', '<', '^', '~', ' ']);
-        clean.split(['.', '-']).next()?.parse::<u32>().ok()
-    };
-
-    let m1 = extract_major(&s1);
-    let m2 = extract_major(&s2);
-
-    if let (Some(major1), Some(major2)) = (m1, m2) {
-        // e.g. .nvmrc has "20", package.json has ">=22"
-        if !s1.contains('>') && s2.starts_with(">=") && major1 < major2 {
-            return true;
-        }
-        if !s2.contains('>') && s1.starts_with(">=") && major2 < major1 {
-            return true;
-        }
-        // e.g. "<20" vs ">=20"
-        if s1.starts_with('<') && s2.starts_with('>') && major1 <= major2 {
-            return true;
-        }
-        if s2.starts_with('<') && s1.starts_with('>') && major2 <= major1 {
-            return true;
-        }
-    }
-
-    false
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum EntityKey {
+    Runtime(String),
+    PackageManager(String),
+    DeveloperTool(String),
+    BuildTool(String),
+    CodeGenerator(String),
+    Service(String),
+    Port(u16),
+    EnvVar(String),
+    Other(String),
 }
 
-/// Detect conflicts across multiple configuration sources within requirements.
-fn detect_runtime_conflicts(requirements: &[ProjectRequirement]) -> Vec<ProjectRequirement> {
-    let mut conflicts = Vec::new();
-    let runtimes = ["node", "python", "rust", "go"];
+fn get_entity_key(req: &ProjectRequirement) -> EntityKey {
+    match &req.kind {
+        RequirementKind::Runtime { name, .. } => EntityKey::Runtime(name.to_lowercase()),
+        RequirementKind::PackageManager { name, .. } => {
+            EntityKey::PackageManager(name.to_lowercase())
+        }
+        RequirementKind::DeveloperTool { name, .. } => {
+            EntityKey::DeveloperTool(name.to_lowercase())
+        }
+        RequirementKind::BuildTool { name, .. } => EntityKey::BuildTool(name.to_lowercase()),
+        RequirementKind::CodeGenerator { name, .. } => {
+            EntityKey::CodeGenerator(name.to_lowercase())
+        }
+        RequirementKind::Service { name, .. } => EntityKey::Service(name.to_lowercase()),
+        RequirementKind::Port { port, .. } => EntityKey::Port(*port),
+        RequirementKind::EnvVar { name, .. } => EntityKey::EnvVar(name.clone()),
+        _ => EntityKey::Other(req.name.clone()),
+    }
+}
 
-    for rt in runtimes {
-        let rt_reqs: Vec<&ProjectRequirement> = requirements
-            .iter()
-            .filter(|r| r.name == rt && matches!(r.kind, RequirementKind::Runtime { .. }))
-            .collect();
+/// Consolidate requirements across all configuration sources deterministically.
+/// Merges multi-source declarations (e.g. package.json + mise.toml),
+/// mathematically intersects version constraints, preserves full provenance,
+/// and flags contradictory constraints as explicit conflict requirements.
+pub fn consolidate_requirements(requirements: Vec<ProjectRequirement>) -> Vec<ProjectRequirement> {
+    let mut consolidated: Vec<ProjectRequirement> = Vec::new();
+    let mut key_map: HashMap<EntityKey, usize> = HashMap::new();
+    let mut conflicts: Vec<ProjectRequirement> = Vec::new();
 
-        if rt_reqs.len() > 1 {
-            for i in 0..rt_reqs.len() {
-                for j in (i + 1)..rt_reqs.len() {
-                    let r1 = rt_reqs[i];
-                    let r2 = rt_reqs[j];
-                    if let (
-                        RequirementKind::Runtime { constraint: c1, .. },
-                        RequirementKind::Runtime { constraint: c2, .. },
-                    ) = (&r1.kind, &r2.kind)
-                    {
-                        if are_constraints_conflicting(c1, c2) {
-                            let p1 = match &r1.evidence.source {
-                                unfuck_core::evidence::EvidenceSource::RepositoryFile {
-                                    path,
-                                    ..
-                                } => path.clone(),
-                                _ => PathBuf::from("config1"),
-                            };
-                            let p2 = match &r2.evidence.source {
-                                unfuck_core::evidence::EvidenceSource::RepositoryFile {
-                                    path,
-                                    ..
-                                } => path.clone(),
-                                _ => PathBuf::from("config2"),
-                            };
+    for req in requirements {
+        if matches!(req.kind, RequirementKind::Conflict { .. }) {
+            conflicts.push(req);
+            continue;
+        }
 
-                            let ev = Evidence::new(
-                                unfuck_core::evidence::EvidenceSource::MultiSourceConflict {
-                                    summary: format!(
-                                        "Contradictory {} version requirements: '{}' vs '{}'",
-                                        rt, c1, c2
-                                    ),
-                                    files: vec![p1.clone(), p2.clone()],
-                                },
-                                Confidence::Confirmed,
-                                format!(
-                                    "Configuration conflict: {} ({}) conflicts with {} ({})",
-                                    r1.evidence.description,
-                                    p1.display(),
-                                    r2.evidence.description,
-                                    p2.display()
-                                ),
-                            );
-
-                            conflicts.push(ProjectRequirement {
-                                name: format!("conflict:{}", rt),
-                                kind: RequirementKind::Conflict {
-                                    target: rt.to_string(),
-                                    details: format!(
-                                        "Contradictory {} version requirements: {} vs {}",
-                                        rt, c1, c2
-                                    ),
-                                    competing_sources: vec![
-                                        r1.evidence.description.clone(),
-                                        r2.evidence.description.clone(),
-                                    ],
-                                },
-                                evidence: ev,
-                            });
-                        }
+        let key = get_entity_key(&req);
+        if let Some(&idx) = key_map.get(&key) {
+            let existing = &mut consolidated[idx];
+            match (&existing.kind, &req.kind) {
+                (
+                    RequirementKind::Runtime {
+                        name,
+                        constraint: c1,
+                    },
+                    RequirementKind::Runtime { constraint: c2, .. },
+                ) => match c1.intersect(c2) {
+                    Ok(intersected) => {
+                        existing.kind = RequirementKind::Runtime {
+                            name: name.clone(),
+                            constraint: intersected,
+                        };
+                        existing.additional_evidence.push(req.evidence);
+                        existing.additional_evidence.extend(req.additional_evidence);
                     }
+                    Err(err) => {
+                        let p1 = match &existing.evidence.source {
+                            unfuck_core::evidence::EvidenceSource::RepositoryFile { path, .. } => {
+                                path.clone()
+                            }
+                            _ => PathBuf::from("config1"),
+                        };
+                        let p2 = match &req.evidence.source {
+                            unfuck_core::evidence::EvidenceSource::RepositoryFile { path, .. } => {
+                                path.clone()
+                            }
+                            _ => PathBuf::from("config2"),
+                        };
+                        let ev = Evidence::new(
+                            unfuck_core::evidence::EvidenceSource::MultiSourceConflict {
+                                summary: format!(
+                                    "Contradictory {} version requirements: '{}' vs '{}'",
+                                    name, c1, c2
+                                ),
+                                files: vec![p1.clone(), p2.clone()],
+                            },
+                            Confidence::Confirmed,
+                            format!(
+                                "Configuration conflict: {} ({}) conflicts with {} ({}): {}",
+                                existing.evidence.description,
+                                p1.display(),
+                                req.evidence.description,
+                                p2.display(),
+                                err
+                            ),
+                        );
+                        conflicts.push(ProjectRequirement::new(
+                            format!("conflict:{}", name),
+                            RequirementKind::Conflict {
+                                target: name.clone(),
+                                details: format!(
+                                    "Contradictory {} version requirements: {} vs {}: {}",
+                                    name, c1, c2, err
+                                ),
+                                competing_sources: vec![
+                                    existing.evidence.description.clone(),
+                                    req.evidence.description.clone(),
+                                ],
+                            },
+                            ev,
+                        ));
+                    }
+                },
+                (
+                    RequirementKind::PackageManager {
+                        name,
+                        constraint: c1,
+                    },
+                    RequirementKind::PackageManager { constraint: c2, .. },
+                ) => {
+                    let mut is_conflict = false;
+                    let merged_constraint = match (c1, c2) {
+                        (Some(v1), Some(v2)) => match v1.intersect(v2) {
+                            Ok(intersected) => Some(intersected),
+                            Err(err) => {
+                                is_conflict = true;
+                                let p1 = match &existing.evidence.source {
+                                    unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                                        path,
+                                        ..
+                                    } => path.clone(),
+                                    _ => PathBuf::from("config1"),
+                                };
+                                let p2 = match &req.evidence.source {
+                                    unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                                        path,
+                                        ..
+                                    } => path.clone(),
+                                    _ => PathBuf::from("config2"),
+                                };
+                                let ev = Evidence::new(
+                                    unfuck_core::evidence::EvidenceSource::MultiSourceConflict {
+                                        summary: format!(
+                                            "Contradictory {} package manager version requirements: '{}' vs '{}'",
+                                            name, v1, v2
+                                        ),
+                                        files: vec![p1.clone(), p2.clone()],
+                                    },
+                                    Confidence::Confirmed,
+                                    format!(
+                                        "Configuration conflict: {} ({}) conflicts with {} ({}): {}",
+                                        existing.evidence.description,
+                                        p1.display(),
+                                        req.evidence.description,
+                                        p2.display(),
+                                        err
+                                    ),
+                                );
+                                conflicts.push(ProjectRequirement::new(
+                                    format!("conflict:{}", name),
+                                    RequirementKind::Conflict {
+                                        target: name.clone(),
+                                        details: format!(
+                                            "Contradictory {} version requirements: {} vs {}: {}",
+                                            name, v1, v2, err
+                                        ),
+                                        competing_sources: vec![
+                                            existing.evidence.description.clone(),
+                                            req.evidence.description.clone(),
+                                        ],
+                                    },
+                                    ev,
+                                ));
+                                Some(v1.clone())
+                            }
+                        },
+                        (Some(v), None) | (None, Some(v)) => Some(v.clone()),
+                        (None, None) => None,
+                    };
+                    if !is_conflict {
+                        existing.kind = RequirementKind::PackageManager {
+                            name: name.clone(),
+                            constraint: merged_constraint,
+                        };
+                    }
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
+                }
+                _ => {
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
                 }
             }
+        } else {
+            let idx = consolidated.len();
+            consolidated.push(req);
+            key_map.insert(key, idx);
         }
     }
 
-    conflicts
+    consolidated.extend(conflicts);
+    consolidated
 }
 
 struct DirAnalysis {
@@ -325,9 +406,8 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
     env_vars.sort();
     env_vars.dedup();
 
-    // 3. Detect any conflicting requirements across sources
-    let conflicts = detect_runtime_conflicts(&requirements);
-    requirements.extend(conflicts);
+    // 3. Consolidate requirements and detect conflicts across sources
+    let requirements = consolidate_requirements(requirements);
 
     let name = root_buf
         .file_name()
@@ -414,7 +494,10 @@ sqlx = { version = "0.8", features = ["postgres"] }
         assert!(rust_req.is_some());
         if let Some(r) = rust_req {
             if let RequirementKind::Runtime { constraint, .. } = &r.kind {
-                assert_eq!(constraint, ">=1.85");
+                assert_eq!(
+                    constraint,
+                    &VersionConstraint::GreaterEqual("1.85".to_string())
+                );
             } else {
                 panic!("Expected Runtime requirement");
             }
@@ -497,4 +580,45 @@ dependencies = ["fastapi>=0.110.0"]
         let err_msg = result.unwrap_err().to_string();
         assert!(err_msg.contains("is not a directory"));
     }
+
+    #[test]
+    fn test_consolidate_multi_source_package_manager() {
+        let dir = tempdir().unwrap();
+        let pkg_json = r#"{
+            "name": "immich-like-app",
+            "packageManager": "pnpm@11.24.0",
+            "engines": {
+                "pnpm": ">=10.0.0"
+            }
+        }"#;
+        fs::write(dir.path().join("package.json"), pkg_json).unwrap();
+        let mise_toml = r#"
+[tools]
+pnpm = "11.24.0"
+"#;
+        fs::write(dir.path().join("mise.toml"), mise_toml).unwrap();
+
+        let manifest = analyze_project(dir.path()).unwrap();
+        let pnpm_reqs: Vec<&ProjectRequirement> = manifest
+            .requirements
+            .iter()
+            .filter(|r| r.name == "pnpm")
+            .collect();
+
+        assert_eq!(pnpm_reqs.len(), 1, "Should consolidate to exactly 1 pnpm requirement");
+        let pnpm_req = pnpm_reqs[0];
+        if let RequirementKind::PackageManager { constraint, .. } = &pnpm_req.kind {
+            assert_eq!(
+                constraint.as_ref(),
+                Some(&VersionConstraint::Exact("11.24.0".to_string()))
+            );
+        } else {
+            panic!("Expected PackageManager requirement for pnpm");
+        }
+        assert!(
+            !pnpm_req.additional_evidence.is_empty(),
+            "Provenance from multiple sources should be preserved"
+        );
+    }
 }
+

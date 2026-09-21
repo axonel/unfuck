@@ -4,6 +4,7 @@ use toml::Value;
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectRequirement, RequirementKind};
 use unfuck_core::Confidence;
+use unfuck_core::VersionConstraint;
 
 pub struct PythonDiscovery {
     pub is_python: bool,
@@ -61,14 +62,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                     Some(1),
                     format!("Python version specified in .python-version: {}", ver),
                 );
-                requirements.push(ProjectRequirement {
-                    name: "python".to_string(),
-                    kind: RequirementKind::Runtime {
+                requirements.push(ProjectRequirement::new(
+                    "python",
+                    RequirementKind::Runtime {
                         name: "python".to_string(),
-                        constraint: format!(">={}", ver),
+                        constraint: VersionConstraint::parse(&ver),
                     },
-                    evidence: ev.clone(),
-                });
+                    ev.clone(),
+                ));
                 evidence.push(ev);
             }
         }
@@ -98,14 +99,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                                 req_py
                             ),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "python".to_string(),
-                            kind: RequirementKind::Runtime {
+                        requirements.push(ProjectRequirement::new(
+                            "python",
+                            RequirementKind::Runtime {
                                 name: "python".to_string(),
-                                constraint: req_py.to_string(),
+                                constraint: VersionConstraint::parse(req_py),
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -126,14 +127,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                                 poetry_py
                             ),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "python".to_string(),
-                            kind: RequirementKind::Runtime {
+                        requirements.push(ProjectRequirement::new(
+                            "python",
+                            RequirementKind::Runtime {
                                 name: "python".to_string(),
-                                constraint: poetry_py.to_string(),
+                                constraint: VersionConstraint::parse(poetry_py),
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -148,14 +149,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                             Confidence::High,
                             "Python runtime required by pyproject.toml",
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "python".to_string(),
-                            kind: RequirementKind::Runtime {
+                        requirements.push(ProjectRequirement::new(
+                            "python",
+                            RequirementKind::Runtime {
                                 name: "python".to_string(),
-                                constraint: "*".to_string(),
+                                constraint: VersionConstraint::Any,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -189,14 +190,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                             None,
                             "PostgreSQL driver detected in Python dependencies",
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -209,14 +210,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                                 None,
                                 "Default port 8000 inferred from FastAPI/Uvicorn dependency",
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "port:8000".to_string(),
-                                kind: RequirementKind::Port {
+                            requirements.push(ProjectRequirement::new(
+                                "port:8000",
+                                RequirementKind::Port {
                                     port: 8000,
                                     service_hint: Some("fastapi".to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         }
                     } else if check_dep("django") {
@@ -227,14 +228,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                                 None,
                                 "Default port 8000 inferred from Django dependency",
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "port:8000".to_string(),
-                                kind: RequirementKind::Port {
+                            requirements.push(ProjectRequirement::new(
+                                "port:8000",
+                                RequirementKind::Port {
                                     port: 8000,
                                     service_hint: Some("django".to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         } else if check_dep("flask") && !ports.contains(&5000) {
                             ports.push(5000);
@@ -243,14 +244,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                                 None,
                                 "Default port 5000 inferred from Flask dependency",
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "port:5000".to_string(),
-                                kind: RequirementKind::Port {
+                            requirements.push(ProjectRequirement::new(
+                                "port:5000",
+                                RequirementKind::Port {
                                     port: 5000,
                                     service_hint: Some("flask".to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         }
                     }
@@ -308,14 +309,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                                 trimmed
                             ),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
                 } else if trimmed.starts_with("fastapi") || trimmed.starts_with("uvicorn") {
@@ -347,14 +348,14 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                     Confidence::High,
                     "Python runtime required by requirements.txt",
                 );
-                requirements.push(ProjectRequirement {
-                    name: "python".to_string(),
-                    kind: RequirementKind::Runtime {
+                requirements.push(ProjectRequirement::new(
+                    "python",
+                    RequirementKind::Runtime {
                         name: "python".to_string(),
-                        constraint: "*".to_string(),
+                        constraint: VersionConstraint::Any,
                     },
-                    evidence: ev.clone(),
-                });
+                    ev.clone(),
+                ));
                 evidence.push(ev);
             }
         }

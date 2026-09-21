@@ -4,6 +4,7 @@ use toml::Value;
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectRequirement, RequirementKind};
 use unfuck_core::Confidence;
+use unfuck_core::VersionConstraint;
 
 pub struct RustDiscovery {
     pub is_rust: bool,
@@ -55,14 +56,14 @@ pub fn analyze_rust(root: &Path) -> RustDiscovery {
                             None,
                             format!("Rust MSRV declared in rust-version: {}", ver),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "rust".to_string(),
-                            kind: RequirementKind::Runtime {
+                        requirements.push(ProjectRequirement::new(
+                            "rust",
+                            RequirementKind::Runtime {
                                 name: "rust".to_string(),
-                                constraint: format!(">={}", ver),
+                                constraint: VersionConstraint::GreaterEqual(ver.to_string()),
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     } else {
                         // General Rust runtime requirement
@@ -75,14 +76,14 @@ pub fn analyze_rust(root: &Path) -> RustDiscovery {
                             Confidence::High,
                             "Rust toolchain required by Cargo project",
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "rust".to_string(),
-                            kind: RequirementKind::Runtime {
+                        requirements.push(ProjectRequirement::new(
+                            "rust",
+                            RequirementKind::Runtime {
                                 name: "rust".to_string(),
-                                constraint: "*".to_string(),
+                                constraint: VersionConstraint::Any,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -107,14 +108,14 @@ pub fn analyze_rust(root: &Path) -> RustDiscovery {
                             None,
                             "PostgreSQL client crate detected in Cargo dependencies",
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
                 }
@@ -162,14 +163,14 @@ pub fn analyze_rust(root: &Path) -> RustDiscovery {
                         None,
                         format!("Rust toolchain channel specified: {}", channel),
                     );
-                    requirements.push(ProjectRequirement {
-                        name: "rust".to_string(),
-                        kind: RequirementKind::Runtime {
+                    requirements.push(ProjectRequirement::new(
+                        "rust",
+                        RequirementKind::Runtime {
                             name: "rust".to_string(),
-                            constraint: format!(">={}", channel),
+                            constraint: VersionConstraint::parse(channel),
                         },
-                        evidence: ev.clone(),
-                    });
+                        ev.clone(),
+                    ));
                     evidence.push(ev);
                 }
             }
@@ -184,14 +185,14 @@ pub fn analyze_rust(root: &Path) -> RustDiscovery {
                     None,
                     format!("Rust toolchain channel specified: {}", channel),
                 );
-                requirements.push(ProjectRequirement {
-                    name: "rust".to_string(),
-                    kind: RequirementKind::Runtime {
+                requirements.push(ProjectRequirement::new(
+                    "rust",
+                    RequirementKind::Runtime {
                         name: "rust".to_string(),
-                        constraint: format!(">={}", channel),
+                        constraint: VersionConstraint::parse(channel),
                     },
-                    evidence: ev.clone(),
-                });
+                    ev.clone(),
+                ));
                 evidence.push(ev);
             }
         }

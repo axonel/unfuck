@@ -164,14 +164,14 @@ pub fn analyze_env(root: &Path) -> EnvDiscovery {
                                     Some(line_num),
                                     format!("Port {} declared via {}={}", p, key, val),
                                 );
-                                requirements.push(ProjectRequirement {
-                                    name: format!("port:{}", p),
-                                    kind: RequirementKind::Port {
+                                requirements.push(ProjectRequirement::new(
+                                    format!("port:{}", p),
+                                    RequirementKind::Port {
                                         port: p,
                                         service_hint: Some("environment".to_string()),
                                     },
-                                    evidence: ev.clone(),
-                                });
+                                    ev.clone(),
+                                ));
                                 evidence.push(ev);
                             }
                         }
@@ -192,14 +192,14 @@ pub fn analyze_env(root: &Path) -> EnvDiscovery {
                                 key, db_port
                             ),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
 
                         if !ports.contains(&db_port) {
@@ -218,15 +218,15 @@ pub fn analyze_env(root: &Path) -> EnvDiscovery {
                             Confidence::High,
                             format!("Required environment variable '{}' has no default value and must be supplied", key),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: key.clone(),
-                            kind: RequirementKind::EnvVar {
+                        requirements.push(ProjectRequirement::new(
+                            key.clone(),
+                            RequirementKind::EnvVar {
                                 name: key,
                                 default_value: None,
                                 required: true,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
                 }

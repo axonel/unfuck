@@ -272,6 +272,23 @@ impl VersionConstraint {
                     ))
                 }
             }
+            (Self::Compatible(compat_v), Self::Exact(exact_v))
+            | (Self::Exact(exact_v), Self::Compatible(compat_v)) => {
+                let c_compat = parse_version_components(compat_v);
+                let c_exact = parse_version_components(exact_v);
+                if !c_compat.is_empty()
+                    && !c_exact.is_empty()
+                    && c_compat[0] == c_exact[0]
+                    && compare_version_components(&c_exact, &c_compat) != Ordering::Less
+                {
+                    Ok(Self::Exact(exact_v.clone()))
+                } else {
+                    Err(format!(
+                        "Exact version =={} is incompatible with ^{}",
+                        exact_v, compat_v
+                    ))
+                }
+            }
             (Self::GreaterEqual(v1), Self::GreaterEqual(v2)) => {
                 let c1 = parse_version_components(v1);
                 let c2 = parse_version_components(v2);

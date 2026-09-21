@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectRequirement, RequirementKind};
 use unfuck_core::Confidence;
+use unfuck_core::VersionConstraint;
 
 pub struct NodeDiscovery {
     pub is_node: bool,
@@ -114,14 +115,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                         Some(1),
                         format!("Node version specified in {}: {}", nvm_file, ver),
                     );
-                    requirements.push(ProjectRequirement {
-                        name: "node".to_string(),
-                        kind: RequirementKind::Runtime {
+                    requirements.push(ProjectRequirement::new(
+                        "node",
+                        RequirementKind::Runtime {
                             name: "node".to_string(),
-                            constraint: ver,
+                            constraint: VersionConstraint::parse(&ver),
                         },
-                        evidence: ev.clone(),
-                    });
+                        ev.clone(),
+                    ));
                     evidence.push(ev);
                 }
             }
@@ -137,7 +138,7 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                 Ok(json) => {
                     let mut has_node_req = false;
 
-                    // engines.node
+                    // engines.node and engines.<pm>
                     if let Some(engines) = json.get("engines") {
                         if let Some(node_engine) = engines.get("node").and_then(|v| v.as_str()) {
                             has_node_req = true;
@@ -146,35 +147,41 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 None,
                                 format!("Node version declared in engines.node: {}", node_engine),
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "node".to_string(),
-                                kind: RequirementKind::Runtime {
+                            requirements.push(ProjectRequirement::new(
+                                "node",
+                                RequirementKind::Runtime {
                                     name: "node".to_string(),
-                                    constraint: node_engine.to_string(),
+                                    constraint: VersionConstraint::parse(node_engine),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         }
-                        if let Some(npm_engine) = engines.get("npm").and_then(|v| v.as_str()) {
-                            let ev = Evidence::from_repo_file(
-                                PathBuf::from("package.json"),
-                                None,
-                                format!("npm version declared in engines.npm: {}", npm_engine),
-                            );
-                            requirements.push(ProjectRequirement {
-                                name: "npm".to_string(),
-                                kind: RequirementKind::PackageManager {
-                                    name: "npm".to_string(),
-                                    constraint: Some(npm_engine.to_string()),
-                                },
-                                evidence: ev.clone(),
-                            });
-                            evidence.push(ev);
+
+                        for pm in ["pnpm", "npm", "yarn", "bun"] {
+                            if let Some(pm_engine) = engines.get(pm).and_then(|v| v.as_str()) {
+                                if !package_managers.contains(&pm.to_string()) {
+                                    package_managers.push(pm.to_string());
+                                }
+                                let ev = Evidence::from_repo_file(
+                                    PathBuf::from("package.json"),
+                                    None,
+                                    format!("{} version declared in engines.{}: {}", pm, pm, pm_engine),
+                                );
+                                requirements.push(ProjectRequirement::new(
+                                    pm,
+                                    RequirementKind::PackageManager {
+                                        name: pm.to_string(),
+                                        constraint: Some(VersionConstraint::parse(pm_engine)),
+                                    },
+                                    ev.clone(),
+                                ));
+                                evidence.push(ev);
+                            }
                         }
                     }
 
-                    // packageManager field (e.g. "pnpm@9.0.0")
+                    // packageManager field (e.g. "pnpm@11.24.0")
                     if let Some(pm) = json.get("packageManager").and_then(|v| v.as_str()) {
                         let parts: Vec<&str> = pm.split('@').collect();
                         let pm_name = parts[0].to_string();
@@ -187,14 +194,15 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                             None,
                             format!("Package manager specified: {}", pm),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: pm_name.clone(),
-                            kind: RequirementKind::PackageManager {
+                        let parsed_pm_constraint = pm_ver.as_deref().map(VersionConstraint::parse);
+                        requirements.push(ProjectRequirement::new(
+                            pm_name.clone(),
+                            RequirementKind::PackageManager {
                                 name: pm_name,
-                                constraint: pm_ver,
+                                constraint: parsed_pm_constraint,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -261,14 +269,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                         major
                                     ),
                                 );
-                                requirements.push(ProjectRequirement {
-                                    name: "node".to_string(),
-                                    kind: RequirementKind::Runtime {
+                                requirements.push(ProjectRequirement::new(
+                                    "node",
+                                    RequirementKind::Runtime {
                                         name: "node".to_string(),
-                                        constraint: format!(">={}.0.0", major),
+                                        constraint: VersionConstraint::GreaterEqual(format!("{}.0.0", major)),
                                     },
-                                    evidence: ev.clone(),
-                                });
+                                    ev.clone(),
+                                ));
                                 evidence.push(ev);
                             }
                         }
@@ -285,14 +293,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                             Confidence::High,
                             "Node.js runtime required by package.json",
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "node".to_string(),
-                            kind: RequirementKind::Runtime {
+                        requirements.push(ProjectRequirement::new(
+                            "node",
+                            RequirementKind::Runtime {
                                 name: "node".to_string(),
-                                constraint: "*".to_string(),
+                                constraint: VersionConstraint::Any,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -305,7 +313,7 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 .map(|m| {
                                     m.values()
                                         .any(|v| v.as_str().unwrap_or("").contains(keyword))
-                                })
+                                 })
                                 .unwrap_or(false)
                     };
 
@@ -317,14 +325,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 None,
                                 "Default port 5173 inferred from Vite configuration",
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "port:5173".to_string(),
-                                kind: RequirementKind::Port {
+                            requirements.push(ProjectRequirement::new(
+                                "port:5173",
+                                RequirementKind::Port {
                                     port: 5173,
                                     service_hint: Some("vite".to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         }
                     } else if has_dep("next") || check_script_contains("next") {
@@ -335,14 +343,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 None,
                                 "Default port 3000 inferred from Next.js configuration",
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "port:3000".to_string(),
-                                kind: RequirementKind::Port {
+                            requirements.push(ProjectRequirement::new(
+                                "port:3000",
+                                RequirementKind::Port {
                                     port: 3000,
                                     service_hint: Some("nextjs".to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         } else if (has_dep("astro") || check_script_contains("astro"))
                             && !ports.contains(&4321)
@@ -354,14 +362,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 None,
                                 "Default port 4321 inferred from Astro configuration",
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "port:4321".to_string(),
-                                kind: RequirementKind::Port {
+                            requirements.push(ProjectRequirement::new(
+                                "port:4321",
+                                RequirementKind::Port {
                                     port: 4321,
                                     service_hint: Some("astro".to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         }
                     }
@@ -373,14 +381,14 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                             None,
                             "PostgreSQL client dependency detected in dependencies",
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
                 }

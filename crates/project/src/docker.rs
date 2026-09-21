@@ -2,6 +2,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectRequirement, RequirementKind};
+use unfuck_core::VersionConstraint;
 
 pub struct DockerDiscovery {
     pub docker_used: bool,
@@ -75,8 +76,8 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                                 };
 
                                 let constraint = ver_constraint
-                                    .map(|v| format!(">={}", v))
-                                    .unwrap_or_else(|| "*".to_string());
+                                    .map(|v| VersionConstraint::GreaterEqual(v.to_string()))
+                                    .unwrap_or(VersionConstraint::Any);
 
                                 let ev = Evidence::from_repo_file(
                                     PathBuf::from(&fname),
@@ -86,14 +87,14 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                                         rt_name, image_str
                                     ),
                                 );
-                                requirements.push(ProjectRequirement {
-                                    name: rt_name.to_string(),
-                                    kind: RequirementKind::Runtime {
+                                requirements.push(ProjectRequirement::new(
+                                    rt_name,
+                                    RequirementKind::Runtime {
                                         name: rt_name.to_string(),
                                         constraint,
                                     },
-                                    evidence: ev.clone(),
-                                });
+                                    ev.clone(),
+                                ));
                                 evidence.push(ev);
                             }
                             "postgres" | "postgresql" => {
@@ -102,14 +103,14 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                                     Some(idx + 1),
                                     format!("PostgreSQL container image declared in {}", fname),
                                 );
-                                requirements.push(ProjectRequirement {
-                                    name: "postgresql".to_string(),
-                                    kind: RequirementKind::Service {
+                                requirements.push(ProjectRequirement::new(
+                                    "postgresql",
+                                    RequirementKind::Service {
                                         name: "postgresql".to_string(),
                                         min_version: tag.map(|t| t.to_string()),
                                     },
-                                    evidence: ev.clone(),
-                                });
+                                    ev.clone(),
+                                ));
                                 evidence.push(ev);
                                 if !ports.contains(&5432) {
                                     ports.push(5432);
@@ -132,14 +133,14 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                                     Some(idx + 1),
                                     format!("Port {} exposed in {}", port, fname),
                                 );
-                                requirements.push(ProjectRequirement {
-                                    name: format!("port:{}", port),
-                                    kind: RequirementKind::Port {
+                                requirements.push(ProjectRequirement::new(
+                                    format!("port:{}", port),
+                                    RequirementKind::Port {
                                         port,
                                         service_hint: Some("docker".to_string()),
                                     },
-                                    evidence: ev.clone(),
-                                });
+                                    ev.clone(),
+                                ));
                                 evidence.push(ev);
                             }
                         }
@@ -192,14 +193,14 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                             Some(idx + 1),
                             format!("PostgreSQL container service declared in {}", compose_name),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
 
@@ -237,14 +238,14 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
                                         Some(idx + 1),
                                         format!("Port {} mapped in {}", port, compose_name),
                                     );
-                                    requirements.push(ProjectRequirement {
-                                        name: format!("port:{}", port),
-                                        kind: RequirementKind::Port {
+                                    requirements.push(ProjectRequirement::new(
+                                        format!("port:{}", port),
+                                        RequirementKind::Port {
                                             port,
                                             service_hint: Some("docker-compose".to_string()),
                                         },
-                                        evidence: ev.clone(),
-                                    });
+                                        ev.clone(),
+                                    ));
                                     evidence.push(ev);
                                 }
                             }
@@ -280,14 +281,14 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
             None,
             "Docker service required by project containers",
         );
-        requirements.push(ProjectRequirement {
-            name: "docker".to_string(),
-            kind: RequirementKind::Service {
+        requirements.push(ProjectRequirement::new(
+            "docker",
+            RequirementKind::Service {
                 name: "docker".to_string(),
                 min_version: None,
             },
-            evidence: ev.clone(),
-        });
+            ev.clone(),
+        ));
         evidence.push(ev);
     }
 

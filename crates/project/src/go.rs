@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectRequirement, RequirementKind};
 use unfuck_core::Confidence;
+use unfuck_core::VersionConstraint;
 
 pub struct GoDiscovery {
     pub is_go: bool,
@@ -44,14 +45,14 @@ pub fn analyze_go(root: &Path) -> GoDiscovery {
                                 Some(idx + 1),
                                 format!("Go language version declared: {}", ver),
                             );
-                            requirements.push(ProjectRequirement {
-                                name: "go".to_string(),
-                                kind: RequirementKind::Runtime {
+                            requirements.push(ProjectRequirement::new(
+                                "go",
+                                RequirementKind::Runtime {
                                     name: "go".to_string(),
-                                    constraint: format!(">={}", ver),
+                                    constraint: VersionConstraint::GreaterEqual(ver.to_string()),
                                 },
-                                evidence: ev.clone(),
-                            });
+                                ev.clone(),
+                            ));
                             evidence.push(ev);
                         }
                     }
@@ -66,14 +67,14 @@ pub fn analyze_go(root: &Path) -> GoDiscovery {
                             Some(idx + 1),
                             format!("PostgreSQL Go driver detected: {}", trimmed),
                         );
-                        requirements.push(ProjectRequirement {
-                            name: "postgresql".to_string(),
-                            kind: RequirementKind::Service {
+                        requirements.push(ProjectRequirement::new(
+                            "postgresql",
+                            RequirementKind::Service {
                                 name: "postgresql".to_string(),
                                 min_version: None,
                             },
-                            evidence: ev.clone(),
-                        });
+                            ev.clone(),
+                        ));
                         evidence.push(ev);
                     }
                 }
@@ -90,14 +91,14 @@ pub fn analyze_go(root: &Path) -> GoDiscovery {
                         Confidence::High,
                         "Go toolchain required by project",
                     );
-                    requirements.push(ProjectRequirement {
-                        name: "go".to_string(),
-                        kind: RequirementKind::Runtime {
+                    requirements.push(ProjectRequirement::new(
+                        "go",
+                        RequirementKind::Runtime {
                             name: "go".to_string(),
-                            constraint: "*".to_string(),
+                            constraint: VersionConstraint::Any,
                         },
-                        evidence: ev.clone(),
-                    });
+                        ev.clone(),
+                    ));
                     evidence.push(ev);
                 }
             }
