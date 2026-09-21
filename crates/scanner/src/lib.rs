@@ -1,6 +1,7 @@
 pub mod env;
 pub mod network;
 pub mod os;
+pub mod probes;
 pub mod runtimes;
 pub mod services;
 

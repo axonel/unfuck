@@ -158,7 +158,10 @@ pub fn probe_postgresql(path_entries: &[PathBuf], listening_ports: &[PortInfo]) 
         None
     };
 
-    if pg_port_listening.is_some() || found_socket.is_some() {
+    let (probe_result, probe_ev) = crate::probes::probe_tcp_port("127.0.0.1", 5432, 100);
+    let is_connected = matches!(probe_result, crate::probes::TcpProbeResult::Connected);
+
+    if is_connected || pg_port_listening.is_some() || found_socket.is_some() {
         let desc = if let Some(ref ver) = version {
             format!(
                 "PostgreSQL is running (version {}) listening on port 5432 / socket",
@@ -174,14 +177,18 @@ pub fn probe_postgresql(path_entries: &[PathBuf], listening_ports: &[PortInfo]) 
             status: ServiceStatus::Running,
             port: Some(5432),
             socket_path: found_socket,
-            evidence: Evidence::new(
-                EvidenceSource::NetworkProbe {
-                    target: "localhost:5432".to_string(),
-                    outcome: "LISTENING".to_string(),
-                },
-                Confidence::Confirmed,
-                desc,
-            ),
+            evidence: if is_connected {
+                probe_ev
+            } else {
+                Evidence::new(
+                    EvidenceSource::NetworkProbe {
+                        target: "localhost:5432".to_string(),
+                        outcome: "LISTENING".to_string(),
+                    },
+                    Confidence::Confirmed,
+                    desc,
+                )
+            },
         }
     } else if psql_bin.is_some() {
         Service {
@@ -190,13 +197,7 @@ pub fn probe_postgresql(path_entries: &[PathBuf], listening_ports: &[PortInfo]) 
             status: ServiceStatus::Stopped,
             port: Some(5432),
             socket_path: None,
-            evidence: Evidence::new(
-                EvidenceSource::DirectObservation {
-                    detail: "psql binary found in PATH but port 5432 is not listening".to_string(),
-                },
-                Confidence::High,
-                "PostgreSQL client/server installed but service is not running on port 5432",
-            ),
+            evidence: probe_ev,
         }
     } else {
         Service {
@@ -205,13 +206,7 @@ pub fn probe_postgresql(path_entries: &[PathBuf], listening_ports: &[PortInfo]) 
             status: ServiceStatus::NotInstalled,
             port: Some(5432),
             socket_path: None,
-            evidence: Evidence::new(
-                EvidenceSource::DirectObservation {
-                    detail: "Neither psql binary nor listening port 5432 found".to_string(),
-                },
-                Confidence::High,
-                "PostgreSQL is not detected on this machine",
-            ),
+            evidence: probe_ev,
         }
     }
 }
