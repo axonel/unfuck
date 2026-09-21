@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use unfuck_core::evidence::{Evidence, EvidenceSource};
 use unfuck_core::ir::Runtime;
@@ -118,15 +118,99 @@ fn resolve_in_path(binary: &str, path_entries: &[PathBuf]) -> Option<PathBuf> {
 
 /// Scan machine runtimes deterministically.
 pub fn scan_runtimes(path_entries: &[PathBuf]) -> Vec<Runtime> {
+    scan_runtimes_with_context(path_entries, None)
+}
+
+/// Scan machine runtimes deterministically, respecting project context for version manager shims.
+pub fn scan_runtimes_with_context(
+    path_entries: &[PathBuf],
+    project_context: Option<&Path>,
+) -> Vec<Runtime> {
     let mut runtimes = Vec::new();
 
+    // 1. Direct mise inspection if available
+    if let Some(proj_dir) = project_context {
+        if let Ok(output) = Command::new("mise")
+            .args(["ls", "--json"])
+            .current_dir(proj_dir)
+            .output()
+        {
+            if output.status.success() {
+                if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                    if let Some(map) = json.as_object() {
+                        for (tool_name, entries) in map {
+                            if matches!(tool_name.as_str(), "node" | "python" | "java" | "rust" | "go" | "bun") {
+                                if let Some(arr) = entries.as_array() {
+                                    for entry in arr {
+                                        let installed = entry.get("installed").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        let active = entry.get("active").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        if installed && active {
+                                            let ver = entry.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
+                                            let install_path = entry.get("install_path").and_then(|v| v.as_str()).unwrap_or("");
+                                            let exe_path = if install_path.is_empty() {
+                                                resolve_in_path(tool_name, path_entries).unwrap_or_else(|| PathBuf::from(tool_name))
+                                            } else {
+                                                let p1 = PathBuf::from(install_path).join(tool_name);
+                                                let p2 = PathBuf::from(install_path).join("bin").join(tool_name);
+                                                if p1.is_file() {
+                                                    p1
+                                                } else if p2.is_file() {
+                                                    p2
+                                                } else {
+                                                    resolve_in_path(tool_name, path_entries).unwrap_or(p1)
+                                                }
+                                            };
+
+                                            if let Some(v) = ver {
+                                                let evidence = Evidence::new(
+                                                    EvidenceSource::ExecutableInspection {
+                                                        path: exe_path.clone(),
+                                                        version_string: v.clone(),
+                                                        exit_code: 0,
+                                                    },
+                                                    Confidence::Confirmed,
+                                                    format!(
+                                                        "Runtime '{}' discovered via mise with version {}",
+                                                        tool_name,
+                                                        v
+                                                    ),
+                                                );
+
+                                                runtimes.push(Runtime {
+                                                    name: tool_name.clone(),
+                                                    version: v,
+                                                    executable_path: exe_path,
+                                                    evidence,
+                                                });
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. PATH resolution and execution probe
     for probe in RUNTIME_PROBES {
+        if runtimes.iter().any(|r| r.name == probe.name) {
+            continue;
+        }
+
         for candidate_name in probe.executable_candidates {
             if let Some(executable_path) = resolve_in_path(candidate_name, path_entries) {
+                let mut cmd = Command::new(&executable_path);
+                cmd.arg(probe.version_arg);
+                if let Some(dir) = project_context {
+                    cmd.current_dir(dir);
+                }
+
                 // Execute controlled subprocess
-                let output = Command::new(&executable_path)
-                    .arg(probe.version_arg)
-                    .output();
+                let output = cmd.output();
 
                 match output {
                     Ok(out) => {

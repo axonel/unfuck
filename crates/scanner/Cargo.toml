@@ -10,3 +10,4 @@ repository.workspace = true
 unfuck-core = { path = "../core" }
 sysinfo = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
