@@ -6,6 +6,10 @@ authors.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "unfuck"
+path = "src/lib.rs"
+
 [[bin]]
 name = "unfuck"
 path = "src/main.rs"
