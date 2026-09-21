@@ -580,6 +580,17 @@ fn test_fixture_c_compose_missing_env() {
 #[test]
 fn test_fixture_d_compose_resolved_env() {
     let fixture_path = fixtures_dir().join("compose-resolved-env");
+    let env_file = fixture_path.join("docker").join(".env");
+    std::fs::write(&env_file, "DB_PASSWORD=supersecret\n").expect("write .env for fixture d");
+
+    struct Cleanup(std::path::PathBuf);
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+    let _guard = Cleanup(env_file);
+
     let manifest = analyze_project(&fixture_path).expect("analyze compose-resolved-env");
     assert_eq!(manifest.compose_projects.len(), 1);
     assert!(
