@@ -243,7 +243,7 @@ cargo build --release
 
 ## Architecture & Design
 
-See [ARCHITECTURE.md](file:///home/roonakyadav/Projects/unfuck/ARCHITECTURE.md) for details on:
+See [ARCHITECTURE.md](ARCHITECTURE.md) for details on:
 - The 8-stage deterministic resolution pipeline
 - Environment IR and Evidence provenance model
 - Data-driven constraint evaluation
@@ -254,4 +254,4 @@ See [ARCHITECTURE.md](file:///home/roonakyadav/Projects/unfuck/ARCHITECTURE.md) 
 
 ## License
 
-[Apache-2.0](file:///home/roonakyadav/Projects/unfuck/LICENSE) © [Axonel](https://github.com/axonel)
+[Apache-2.0](LICENSE) © [Axonel](https://github.com/axonel)

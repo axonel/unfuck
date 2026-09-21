@@ -6,7 +6,7 @@
 set -eu
 
 REPO="${UNFUCK_REPO:-axonel/unfuck}"
-VERSION="${UNFUCK_VERSION:-v0.1.0}"
+DEFAULT_VERSION="v0.1.1"
 INSTALL_DIR="${UNFUCK_INSTALL_DIR:-$HOME/.local/bin}"
 
 # ANSI color codes
@@ -83,7 +83,28 @@ download_file() {
     fi
 }
 
-# 4. Compute SHA256
+# 4. Resolve Target Version
+resolve_version() {
+    if [ -n "${UNFUCK_VERSION:-}" ]; then
+        echo "$UNFUCK_VERSION"
+        return
+    fi
+
+    LATEST=""
+    if command -v curl >/dev/null 2>&1; then
+        LATEST=$(curl -fsSL --connect-timeout 2 -m 4 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    elif command -v wget >/dev/null 2>&1; then
+        LATEST=$(wget -qO- --timeout=4 "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null | grep '"tag_name":' | head -n 1 | sed -E 's/.*"([^"]+)".*/\1/' || true)
+    fi
+
+    if [ -n "$LATEST" ]; then
+        echo "$LATEST"
+    else
+        echo "$DEFAULT_VERSION"
+    fi
+}
+
+# 5. Compute SHA256
 compute_sha256() {
     file="$1"
     if command -v sha256sum >/dev/null 2>&1; then
@@ -97,11 +118,29 @@ compute_sha256() {
     fi
 }
 
+# 6. Check System Prerequisites
+check_prerequisites() {
+    if ! command -v tar >/dev/null 2>&1; then
+        error "'tar' utility is required but not found in PATH."
+    fi
+    if ! command -v gzip >/dev/null 2>&1; then
+        error "'gzip' utility is required but not found in PATH."
+    fi
+    if ! command -v curl >/dev/null 2>&1 && ! command -v wget >/dev/null 2>&1; then
+        error "Either 'curl' or 'wget' is required but neither was found in PATH."
+    fi
+    if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1 && ! command -v openssl >/dev/null 2>&1; then
+        error "A checksum tool ('sha256sum', 'shasum', or 'openssl') is required but none was found in PATH."
+    fi
+}
+
 main() {
     print_banner
+    check_prerequisites
 
     OS=$(detect_os)
     ARCH=$(detect_arch)
+    VERSION=$(resolve_version)
 
     info "Detected platform: ${OS}-${ARCH}"
     info "Target version:   ${VERSION}"
@@ -150,10 +189,16 @@ main() {
         error "Extracted archive did not contain 'unfuck' binary."
     fi
 
-    # Install to target directory
-    mkdir -p "$INSTALL_DIR"
-    cp "$EXTRACTED_BIN" "${INSTALL_DIR}/unfuck"
-    chmod +x "${INSTALL_DIR}/unfuck"
+    # Verify write permissions and install atomically
+    mkdir -p "$INSTALL_DIR" 2>/dev/null || error "Cannot create installation directory '$INSTALL_DIR'. Check permissions."
+    if [ ! -w "$INSTALL_DIR" ]; then
+        error "Installation directory '$INSTALL_DIR' is not writable. Check permissions or configure UNFUCK_INSTALL_DIR."
+    fi
+
+    TMP_INSTALL_FILE="${INSTALL_DIR}/.unfuck.tmp.$$"
+    cp "$EXTRACTED_BIN" "$TMP_INSTALL_FILE"
+    chmod +x "$TMP_INSTALL_FILE"
+    mv -f "$TMP_INSTALL_FILE" "${INSTALL_DIR}/unfuck"
 
     info "Successfully installed unfuck to ${INSTALL_DIR}/unfuck"
 
