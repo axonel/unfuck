@@ -91,24 +91,41 @@ pub fn scan_package_managers(
                 if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
                     if let Some(map) = json.as_object() {
                         for (tool_name, entries) in map {
-                            if matches!(tool_name.as_str(), "pnpm" | "npm" | "yarn" | "bun" | "cargo" | "uv" | "poetry") {
+                            if matches!(
+                                tool_name.as_str(),
+                                "pnpm" | "npm" | "yarn" | "bun" | "cargo" | "uv" | "poetry"
+                            ) {
                                 if let Some(arr) = entries.as_array() {
                                     for entry in arr {
-                                        let installed = entry.get("installed").and_then(|v| v.as_bool()).unwrap_or(false);
+                                        let installed = entry
+                                            .get("installed")
+                                            .and_then(|v| v.as_bool())
+                                            .unwrap_or(false);
                                         if installed {
-                                            let ver = entry.get("version").and_then(|v| v.as_str()).map(|s| s.to_string());
-                                            let install_path = entry.get("install_path").and_then(|v| v.as_str()).unwrap_or("");
+                                            let ver = entry
+                                                .get("version")
+                                                .and_then(|v| v.as_str())
+                                                .map(|s| s.to_string());
+                                            let install_path = entry
+                                                .get("install_path")
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
                                             let exe_path = if install_path.is_empty() {
-                                                resolve_in_path(tool_name, path_entries).unwrap_or_else(|| PathBuf::from(tool_name))
+                                                resolve_in_path(tool_name, path_entries)
+                                                    .unwrap_or_else(|| PathBuf::from(tool_name))
                                             } else {
-                                                let p1 = PathBuf::from(install_path).join(tool_name);
-                                                let p2 = PathBuf::from(install_path).join("bin").join(tool_name);
+                                                let p1 =
+                                                    PathBuf::from(install_path).join(tool_name);
+                                                let p2 = PathBuf::from(install_path)
+                                                    .join("bin")
+                                                    .join(tool_name);
                                                 if p1.is_file() {
                                                     p1
                                                 } else if p2.is_file() {
                                                     p2
                                                 } else {
-                                                    resolve_in_path(tool_name, path_entries).unwrap_or(p1)
+                                                    resolve_in_path(tool_name, path_entries)
+                                                        .unwrap_or(p1)
                                                 }
                                             };
 

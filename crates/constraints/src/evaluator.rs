@@ -172,10 +172,7 @@ pub fn evaluate_constraint(
                     }
                 }
             } else {
-                let reason = format!(
-                    "Package manager '{}' is not installed or not in PATH",
-                    name
-                );
+                let reason = format!("Package manager '{}' is not installed or not in PATH", name);
                 let root_cause_hint = format!("{}.missing", name);
                 EvaluatedConstraint {
                     constraint: constraint.clone(),

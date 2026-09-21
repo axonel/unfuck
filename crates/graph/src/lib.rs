@@ -27,7 +27,9 @@ mod tests {
                 "python".to_string(),
                 RequirementKind::Runtime {
                     name: "python".to_string(),
-                    constraint: unfuck_core::version::VersionConstraint::GreaterEqual("3.11".to_string()),
+                    constraint: unfuck_core::version::VersionConstraint::GreaterEqual(
+                        "3.11".to_string(),
+                    ),
                 },
                 Evidence::from_repo_file(
                     PathBuf::from("pyproject.toml"),

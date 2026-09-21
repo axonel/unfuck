@@ -396,10 +396,7 @@ impl EnvironmentGraph {
                     ],
                 )
             }
-            Constraint::PackageManagerVersion {
-                name,
-                constraint,
-            } => {
+            Constraint::PackageManagerVersion { name, constraint } => {
                 let actual = machine_state
                     .as_deref()
                     .unwrap_or("missing or unresolvable");
@@ -415,11 +412,9 @@ impl EnvironmentGraph {
                             target_comp, name, c_str
                         ),
                         format!("Host package manager: {}", actual),
-                        format!(
-                            "First violated invariant: {} satisfies {}",
-                            name, c_str
-                        ),
-                        format!("Impact: dependency resolution or task execution cannot proceed"),
+                        format!("First violated invariant: {} satisfies {}", name, c_str),
+                        "Impact: dependency resolution or task execution cannot proceed"
+                            .to_string(),
                     ],
                 )
             }

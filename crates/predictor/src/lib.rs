@@ -70,10 +70,7 @@ pub fn predict_failures(
                     });
                 }
 
-                Constraint::PackageManagerVersion {
-                    name,
-                    constraint,
-                } => {
+                Constraint::PackageManagerVersion { name, constraint } => {
                     let constraint_desc = match constraint {
                         Some(c) => format!(" {}", c),
                         None => String::new(),
@@ -135,7 +132,10 @@ pub fn predict_failures(
                         ),
                         confidence,
                         constraint: eval.constraint.clone(),
-                        affected_components: vec![name.clone(), format!("{:?}", kind).to_lowercase()],
+                        affected_components: vec![
+                            name.clone(),
+                            format!("{:?}", kind).to_lowercase(),
+                        ],
                         project_evidence: eval.project_evidence.clone(),
                         machine_evidence: eval.machine_evidence.clone(),
                     });
@@ -461,6 +461,8 @@ mod tests {
         assert_eq!(predictions[0].category, PredictionCategory::ToolMissing);
         // Important: task-level tools must be Medium confidence, NOT High
         assert_eq!(predictions[0].confidence, Confidence::Medium);
-        assert!(!predictions[0].summary.contains("Application startup or build is predicted to fail"));
+        assert!(!predictions[0]
+            .summary
+            .contains("Application startup or build is predicted to fail"));
     }
 }

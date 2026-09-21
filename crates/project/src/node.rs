@@ -166,7 +166,10 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 let ev = Evidence::from_repo_file(
                                     PathBuf::from("package.json"),
                                     None,
-                                    format!("{} version declared in engines.{}: {}", pm, pm, pm_engine),
+                                    format!(
+                                        "{} version declared in engines.{}: {}",
+                                        pm, pm, pm_engine
+                                    ),
                                 );
                                 requirements.push(ProjectRequirement::new(
                                     pm,
@@ -273,7 +276,10 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                     "node",
                                     RequirementKind::Runtime {
                                         name: "node".to_string(),
-                                        constraint: VersionConstraint::GreaterEqual(format!("{}.0.0", major)),
+                                        constraint: VersionConstraint::GreaterEqual(format!(
+                                            "{}.0.0",
+                                            major
+                                        )),
                                     },
                                     ev.clone(),
                                 ));
@@ -313,7 +319,7 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
                                 .map(|m| {
                                     m.values()
                                         .any(|v| v.as_str().unwrap_or("").contains(keyword))
-                                 })
+                                })
                                 .unwrap_or(false)
                     };
 

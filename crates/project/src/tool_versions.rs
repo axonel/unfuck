@@ -246,13 +246,16 @@ opentofu = "1.12.6"
         let disc = analyze_tool_versions(dir.path());
         let java_req = disc.requirements.iter().find(|r| r.name == "java").unwrap();
         if let RequirementKind::Runtime { constraint, .. } = &java_req.kind {
-            assert_eq!(constraint, &VersionConstraint::Exact("21.0.2".to_string())); // EXACT pin, NOT >=
+            assert_eq!(constraint, &VersionConstraint::Exact("21.0.2".to_string()));
+        // EXACT pin, NOT >=
         } else {
             panic!("Expected runtime requirement for java");
         }
 
         let pnpm_req = disc.requirements.iter().find(|r| r.name == "pnpm").unwrap();
-        assert!(matches!(pnpm_req.kind, RequirementKind::PackageManager { .. }));
+        assert!(matches!(
+            pnpm_req.kind,
+            RequirementKind::PackageManager { .. }
+        ));
     }
 }
-

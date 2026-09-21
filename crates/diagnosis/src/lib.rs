@@ -41,13 +41,13 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                     format!("Downstream impact: {} toolchain cannot initialize; build and runtime will fail", runtime),
                 ];
 
-                (format!("{}.version satisfies {}", runtime, constraint), chain)
+                (
+                    format!("{}.version satisfies {}", runtime, constraint),
+                    chain,
+                )
             }
 
-            Constraint::PackageManagerVersion {
-                name,
-                constraint,
-            } => {
+            Constraint::PackageManagerVersion { name, constraint } => {
                 let actual_state = matching_trace
                     .and_then(|t| t.machine_state.as_deref())
                     .unwrap_or("package manager missing or version incompatible");
@@ -58,12 +58,24 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
 
                 let chain = vec![
                     format!("Host machine state: {}", actual_state),
-                    format!("Project specification: requires package manager {}{}", name, constraint_desc),
-                    format!("Violated invariant: package_manager.{}{}", name, constraint_desc),
-                    format!("Downstream impact: dependency installation via {} cannot proceed", name),
+                    format!(
+                        "Project specification: requires package manager {}{}",
+                        name, constraint_desc
+                    ),
+                    format!(
+                        "Violated invariant: package_manager.{}{}",
+                        name, constraint_desc
+                    ),
+                    format!(
+                        "Downstream impact: dependency installation via {} cannot proceed",
+                        name
+                    ),
                 ];
 
-                (format!("package_manager.{}{}", name, constraint_desc), chain)
+                (
+                    format!("package_manager.{}{}", name, constraint_desc),
+                    chain,
+                )
             }
 
             Constraint::ToolAvailable {
@@ -82,9 +94,15 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
 
                 let chain = vec![
                     format!("Host machine state: {}", actual_state),
-                    format!("Project specification: declares {} tool {}{} (scope: {:?})", kind, name, constraint_desc, scope),
+                    format!(
+                        "Project specification: declares {} tool {}{} (scope: {:?})",
+                        kind, name, constraint_desc, scope
+                    ),
                     format!("Violated invariant: tool.{}{}", name, constraint_desc),
-                    format!("Downstream impact: tasks or builds relying on {} will fail", name),
+                    format!(
+                        "Downstream impact: tasks or builds relying on {} will fail",
+                        name
+                    ),
                 ];
 
                 (format!("tool.{}{}", name, constraint_desc), chain)

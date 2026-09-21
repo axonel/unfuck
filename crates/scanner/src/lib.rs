@@ -21,8 +21,7 @@ pub fn scan_machine_for_project(project_context: Option<&Path>) -> MachineCapabi
     let path_entries = env::parse_path_entries();
     let (env_vars, env_evidence) = env::scan_env_vars();
     let runtimes = runtimes::scan_runtimes_with_context(&path_entries, project_context);
-    let package_managers =
-        package_managers::scan_package_managers(&path_entries, project_context);
+    let package_managers = package_managers::scan_package_managers(&path_entries, project_context);
     let tools = tools::scan_tools(&path_entries, project_context);
     let listening_ports = network::scan_listening_ports();
     let services = services::scan_services(&path_entries, &listening_ports);

@@ -103,7 +103,10 @@ fn main() -> ExitCode {
                         );
                     }
                     if !mach.package_managers.is_empty() {
-                        println!("Discovered package managers: {}", mach.package_managers.len());
+                        println!(
+                            "Discovered package managers: {}",
+                            mach.package_managers.len()
+                        );
                         for pm in &mach.package_managers {
                             let ver_str = pm.version.as_deref().unwrap_or("unknown");
                             println!(

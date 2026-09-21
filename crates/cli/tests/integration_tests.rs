@@ -264,43 +264,110 @@ fn test_fixture_mise_pinned_tools() {
     let manifest = analyze_project(&fixture_path).expect("analyze mise-pinned-tools");
 
     // Check package manager consolidation (pnpm from package.json engines + packageManager + mise.toml)
-    let pnpm_reqs: Vec<_> = manifest.requirements.iter().filter(|r| r.name == "pnpm").collect();
-    assert_eq!(pnpm_reqs.len(), 1, "pnpm requirements must be consolidated into exactly one requirement");
+    let pnpm_reqs: Vec<_> = manifest
+        .requirements
+        .iter()
+        .filter(|r| r.name == "pnpm")
+        .collect();
+    assert_eq!(
+        pnpm_reqs.len(),
+        1,
+        "pnpm requirements must be consolidated into exactly one requirement"
+    );
     let pnpm_req = pnpm_reqs[0];
     match &pnpm_req.kind {
         unfuck_core::ir::RequirementKind::PackageManager { name, constraint } => {
             assert_eq!(name, "pnpm");
-            assert_eq!(constraint, &Some(unfuck_core::version::VersionConstraint::Exact("11.24.0".to_string())));
+            assert_eq!(
+                constraint,
+                &Some(unfuck_core::version::VersionConstraint::Exact(
+                    "11.24.0".to_string()
+                ))
+            );
         }
         other => panic!("Expected PackageManager kind for pnpm, found {:?}", other),
     }
-    assert!(!pnpm_req.additional_evidence.is_empty(), "Consolidated pnpm requirement must preserve additional evidence from package.json");
+    assert!(
+        !pnpm_req.additional_evidence.is_empty(),
+        "Consolidated pnpm requirement must preserve additional evidence from package.json"
+    );
 
     // Check exact pin on Java (must NOT be coerced to >=)
-    let java_req = manifest.requirements.iter().find(|r| r.name == "java").expect("java requirement");
+    let java_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "java")
+        .expect("java requirement");
     match &java_req.kind {
         unfuck_core::ir::RequirementKind::Runtime { name, constraint } => {
             assert_eq!(name, "java");
-            assert_eq!(constraint, &unfuck_core::version::VersionConstraint::Exact("21.0.2".to_string()));
+            assert_eq!(
+                constraint,
+                &unfuck_core::version::VersionConstraint::Exact("21.0.2".to_string())
+            );
         }
         other => panic!("Expected Runtime kind for java, found {:?}", other),
     }
 
     // Check classification and scopes
-    let terragrunt = manifest.requirements.iter().find(|r| r.name == "terragrunt").expect("terragrunt");
-    assert!(matches!(&terragrunt.kind, unfuck_core::ir::RequirementKind::DeveloperTool { scope: unfuck_core::ir::ToolScope::RequiredForTask, .. }));
+    let terragrunt = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "terragrunt")
+        .expect("terragrunt");
+    assert!(matches!(
+        &terragrunt.kind,
+        unfuck_core::ir::RequirementKind::DeveloperTool {
+            scope: unfuck_core::ir::ToolScope::RequiredForTask,
+            ..
+        }
+    ));
 
-    let opentofu = manifest.requirements.iter().find(|r| r.name == "opentofu").expect("opentofu");
-    assert!(matches!(&opentofu.kind, unfuck_core::ir::RequirementKind::DeveloperTool { scope: unfuck_core::ir::ToolScope::RequiredForTask, .. }));
+    let opentofu = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "opentofu")
+        .expect("opentofu");
+    assert!(matches!(
+        &opentofu.kind,
+        unfuck_core::ir::RequirementKind::DeveloperTool {
+            scope: unfuck_core::ir::ToolScope::RequiredForTask,
+            ..
+        }
+    ));
 
-    let openapi = manifest.requirements.iter().find(|r| r.name.contains("openapi-generator-cli")).expect("openapi-generator-cli");
-    assert!(matches!(&openapi.kind, unfuck_core::ir::RequirementKind::CodeGenerator { scope: unfuck_core::ir::ToolScope::RequiredForTask, .. }));
+    let openapi = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name.contains("openapi-generator-cli"))
+        .expect("openapi-generator-cli");
+    assert!(matches!(
+        &openapi.kind,
+        unfuck_core::ir::RequirementKind::CodeGenerator {
+            scope: unfuck_core::ir::ToolScope::RequiredForTask,
+            ..
+        }
+    ));
 
-    let oazapfts = manifest.requirements.iter().find(|r| r.name.contains("oazapfts")).expect("oazapfts");
-    assert!(matches!(&oazapfts.kind, unfuck_core::ir::RequirementKind::CodeGenerator { .. }));
+    let oazapfts = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name.contains("oazapfts"))
+        .expect("oazapfts");
+    assert!(matches!(
+        &oazapfts.kind,
+        unfuck_core::ir::RequirementKind::CodeGenerator { .. }
+    ));
 
-    let extism = manifest.requirements.iter().find(|r| r.name.contains("extism")).expect("extism");
-    assert!(matches!(&extism.kind, unfuck_core::ir::RequirementKind::DeveloperTool { .. }));
+    let extism = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name.contains("extism"))
+        .expect("extism");
+    assert!(matches!(
+        &extism.kind,
+        unfuck_core::ir::RequirementKind::DeveloperTool { .. }
+    ));
 
     // Evaluate predictions against empty machine
     let machine = unfuck_core::ir::MachineCapability {
@@ -325,7 +392,10 @@ fn test_fixture_mise_pinned_tools() {
     let predictions = predict_failures(&env_model, &evaluated);
 
     // Verify task tool prediction confidence is calibrated to Medium, not claiming application startup failure
-    let tg_pred = predictions.iter().find(|p| p.title.contains("terragrunt")).expect("terragrunt prediction");
+    let tg_pred = predictions
+        .iter()
+        .find(|p| p.title.contains("terragrunt"))
+        .expect("terragrunt prediction");
     assert_eq!(tg_pred.confidence, Confidence::Medium);
     assert!(!tg_pred.summary.contains("Application startup"));
 }
@@ -335,7 +405,11 @@ fn test_fixture_exact_runtime_pin() {
     let fixture_path = fixtures_dir().join("exact-runtime-pin");
     let manifest = analyze_project(&fixture_path).expect("analyze exact-runtime-pin");
 
-    let java_req = manifest.requirements.iter().find(|r| r.name == "java").expect("java");
+    let java_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "java")
+        .expect("java");
     assert_eq!(
         java_req.kind,
         unfuck_core::ir::RequirementKind::Runtime {
@@ -373,7 +447,10 @@ fn test_fixture_exact_runtime_pin() {
 
     let evaluated = evaluate_all(&manifest.requirements, &machine);
     assert_eq!(evaluated.len(), 1);
-    assert!(evaluated[0].is_violated(), "Java 26.0.2.1 must NOT satisfy exact pin == 21.0.2");
+    assert!(
+        evaluated[0].is_violated(),
+        "Java 26.0.2.1 must NOT satisfy exact pin == 21.0.2"
+    );
 }
 
 #[test]
@@ -381,8 +458,16 @@ fn test_fixture_duplicate_runtime_sources() {
     let fixture_path = fixtures_dir().join("duplicate-runtime-sources");
     let manifest = analyze_project(&fixture_path).expect("analyze duplicate-runtime-sources");
 
-    let node_reqs: Vec<_> = manifest.requirements.iter().filter(|r| r.name == "node").collect();
-    assert_eq!(node_reqs.len(), 1, "Duplicate node requirements across package.json and mise.toml must be consolidated");
+    let node_reqs: Vec<_> = manifest
+        .requirements
+        .iter()
+        .filter(|r| r.name == "node")
+        .collect();
+    assert_eq!(
+        node_reqs.len(),
+        1,
+        "Duplicate node requirements across package.json and mise.toml must be consolidated"
+    );
 
     let node_req = node_reqs[0];
     assert_eq!(
@@ -392,6 +477,8 @@ fn test_fixture_duplicate_runtime_sources() {
             constraint: unfuck_core::version::VersionConstraint::Exact("24.21.0".to_string()),
         }
     );
-    assert!(!node_req.additional_evidence.is_empty(), "Consolidated requirement must preserve package.json evidence");
+    assert!(
+        !node_req.additional_evidence.is_empty(),
+        "Consolidated requirement must preserve package.json evidence"
+    );
 }
-

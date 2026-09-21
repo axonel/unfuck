@@ -67,7 +67,7 @@ pub fn parse_version_components(ver_str: &str) -> Vec<u64> {
         .trim_start_matches(|c: char| !c.is_ascii_digit());
 
     let mut components = Vec::new();
-    for part in clean.split(|c: char| c == '.' || c == '-' || c == '_' || c == '+') {
+    for part in clean.split(['.', '-', '_', '+']) {
         let num_part: String = part.chars().take_while(|c| c.is_ascii_digit()).collect();
         if let Ok(num) = num_part.parse::<u64>() {
             components.push(num);
@@ -102,7 +102,9 @@ impl VersionConstraint {
         }
 
         // Check for range like ">=21.0.2, <27" or ">=3.10 <3.13"
-        if trimmed.contains(',') || (trimmed.contains(' ') && (trimmed.contains('<') || trimmed.contains('>'))) {
+        if trimmed.contains(',')
+            || (trimmed.contains(' ') && (trimmed.contains('<') || trimmed.contains('>')))
+        {
             let parts: Vec<&str> = trimmed
                 .split([',', ' '])
                 .map(|p| p.trim())
@@ -119,14 +121,14 @@ impl VersionConstraint {
                         Some((VersionComparator::LessEqual, rest.trim().to_string()))
                     } else if let Some(rest) = p.strip_prefix('<') {
                         Some((VersionComparator::Less, rest.trim().to_string()))
-                    } else if let Some(rest) = p.strip_prefix("==") {
-                        Some((VersionComparator::Exact, rest.trim().to_string()))
                     } else {
-                        None
+                        p.strip_prefix("==")
+                            .map(|rest| (VersionComparator::Exact, rest.trim().to_string()))
                     }
                 };
 
-                if let (Some(lower), Some(upper)) = (parse_op_ver(parts[0]), parse_op_ver(parts[1])) {
+                if let (Some(lower), Some(upper)) = (parse_op_ver(parts[0]), parse_op_ver(parts[1]))
+                {
                     return Self::Range { lower, upper };
                 }
             }
@@ -150,7 +152,20 @@ impl VersionConstraint {
             Self::Compatible(rest.trim().to_string())
         } else {
             // Default with no operator is exact pin
-            Self::Exact(trimmed.trim_start_matches('v').to_string())
+            let clean_exact = if let Some(rest) = trimmed.strip_prefix("version_") {
+                rest
+            } else if let Some(rest) = trimmed.strip_prefix("version-") {
+                rest
+            } else if let Some(rest) = trimmed.strip_prefix('v') {
+                if rest.starts_with(|c: char| c.is_ascii_digit()) {
+                    rest
+                } else {
+                    trimmed
+                }
+            } else {
+                trimmed
+            };
+            Self::Exact(clean_exact.to_string())
         }
     }
 
@@ -209,7 +224,8 @@ impl VersionConstraint {
                 if !actual_comp.is_empty() && !expected_comp.is_empty() {
                     // Caret: major versions must match, and actual >= expected
                     actual_comp[0] == expected_comp[0]
-                        && compare_version_components(&actual_comp, &expected_comp) != Ordering::Less
+                        && compare_version_components(&actual_comp, &expected_comp)
+                            != Ordering::Less
                 } else {
                     actual_str.trim() == expected.trim()
                 }
@@ -224,7 +240,8 @@ impl VersionConstraint {
                     VersionComparator::Greater => {
                         let actual_comp = parse_version_components(actual_str);
                         let expected_comp = parse_version_components(&lower.1);
-                        compare_version_components(&actual_comp, &expected_comp) == Ordering::Greater
+                        compare_version_components(&actual_comp, &expected_comp)
+                            == Ordering::Greater
                     }
                     _ => true,
                 };
@@ -232,7 +249,8 @@ impl VersionConstraint {
                     VersionComparator::LessEqual => {
                         let actual_comp = parse_version_components(actual_str);
                         let expected_comp = parse_version_components(&upper.1);
-                        compare_version_components(&actual_comp, &expected_comp) != Ordering::Greater
+                        compare_version_components(&actual_comp, &expected_comp)
+                            != Ordering::Greater
                     }
                     VersionComparator::Less => {
                         let actual_comp = parse_version_components(actual_str);
@@ -313,14 +331,7 @@ impl VersionConstraint {
                     ))
                 }
             }
-            _ => {
-                // If identical string representations
-                if self == other {
-                    Ok(self.clone())
-                } else {
-                    Ok(self.clone())
-                }
-            }
+            _ => Ok(self.clone()),
         }
     }
 }

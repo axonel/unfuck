@@ -84,15 +84,15 @@ pub fn consolidate_requirements(requirements: Vec<ProjectRequirement>) -> Vec<Pr
                     }
                     Err(err) => {
                         let p1 = match &existing.evidence.source {
-                            unfuck_core::evidence::EvidenceSource::RepositoryFile { path, .. } => {
-                                path.clone()
-                            }
+                            unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                                path, ..
+                            } => path.clone(),
                             _ => PathBuf::from("config1"),
                         };
                         let p2 = match &req.evidence.source {
-                            unfuck_core::evidence::EvidenceSource::RepositoryFile { path, .. } => {
-                                path.clone()
-                            }
+                            unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                                path, ..
+                            } => path.clone(),
                             _ => PathBuf::from("config2"),
                         };
                         let ev = Evidence::new(
@@ -605,7 +605,11 @@ pnpm = "11.24.0"
             .filter(|r| r.name == "pnpm")
             .collect();
 
-        assert_eq!(pnpm_reqs.len(), 1, "Should consolidate to exactly 1 pnpm requirement");
+        assert_eq!(
+            pnpm_reqs.len(),
+            1,
+            "Should consolidate to exactly 1 pnpm requirement"
+        );
         let pnpm_req = pnpm_reqs[0];
         if let RequirementKind::PackageManager { constraint, .. } = &pnpm_req.kind {
             assert_eq!(
@@ -621,4 +625,3 @@ pnpm = "11.24.0"
         );
     }
 }
-
