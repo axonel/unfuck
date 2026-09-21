@@ -25,7 +25,7 @@ The installer verifies SHA256 checksums automatically and places `unfuck` in `~/
 
 To install a specific version or custom directory:
 ```bash
-curl -fsSL https://raw.githubusercontent.com/axonel/unfuck/main/install.sh | UNFUCK_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/axonel/unfuck/main/install.sh | UNFUCK_VERSION=v0.2.1 sh
 ```
 
 ---
@@ -194,15 +194,15 @@ unfuck . --json
 
 ---
 
-## Supported Ecosystems (v0.1.0)
+## Supported Ecosystems (v0.2.1)
 
 | Category | Supported Technologies |
 | :--- | :--- |
 | **Host OS** | Linux (Ubuntu, Debian, Fedora, Arch, Alpine, etc.) on `x86_64` |
 | **Languages & Runtimes** | Node.js, Bun, Python, Rust, Go, Java |
-| **Package Managers** | npm, pnpm, yarn, bun, uv, poetry, pipenv |
-| **Containers & Services** | Docker (daemon socket inspection), PostgreSQL (port 5432, sockets, psql) |
-| **Project Signals** | `package.json`, `bun.lock`, `pyproject.toml`, `requirements.txt`, `uv.lock`, `Dockerfile`, `docker-compose.yml`, `compose.yaml`, `.nvmrc`, `.python-version`, `.tool-versions`, `mise.toml`, `.env.example` |
+| **Package Managers** | npm, pnpm, yarn, bun, uv, poetry, pipenv, cargo |
+| **Containers & Services** | Docker (daemon socket, live containers `docker ps -a`, compose projects), PostgreSQL, Redis |
+| **Project Signals** | `package.json`, `bun.lock`, `pyproject.toml`, `requirements.txt`, `uv.lock`, `Dockerfile`, `docker-compose.yml`, `compose.yaml`, `.nvmrc`, `.python-version`, `.tool-versions`, `mise.toml`, `Cargo.toml`, `go.mod`, `.env.example` |
 
 ---
 
@@ -212,20 +212,20 @@ If you prefer to download release binaries directly from GitHub Releases:
 
 1. Download the archive and SHA256 checksum:
    ```bash
-   curl -LO https://github.com/axonel/unfuck/releases/download/v0.1.0/unfuck-v0.1.0-linux-x86_64.tar.gz
-   curl -LO https://github.com/axonel/unfuck/releases/download/v0.1.0/unfuck-v0.1.0-linux-x86_64.tar.gz.sha256
+   curl -LO https://github.com/axonel/unfuck/releases/download/v0.2.1/unfuck-v0.2.1-linux-x86_64.tar.gz
+   curl -LO https://github.com/axonel/unfuck/releases/download/v0.2.1/unfuck-v0.2.1-linux-x86_64.tar.gz.sha256
    ```
 
 2. Verify the checksum:
    ```bash
-   sha256sum -c unfuck-v0.1.0-linux-x86_64.tar.gz.sha256
+   sha256sum -c unfuck-v0.2.1-linux-x86_64.tar.gz.sha256
    ```
 
 3. Extract and move to your PATH:
    ```bash
-   tar -xzf unfuck-v0.1.0-linux-x86_64.tar.gz
+   tar -xzf unfuck-v0.2.1-linux-x86_64.tar.gz
    mkdir -p ~/.local/bin
-   mv unfuck-v0.1.0-linux-x86_64/unfuck ~/.local/bin/
+   mv unfuck-v0.2.1-linux-x86_64/unfuck ~/.local/bin/
    ```
 
 ---

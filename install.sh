@@ -6,7 +6,7 @@
 set -eu
 
 REPO="${UNFUCK_REPO:-axonel/unfuck}"
-DEFAULT_VERSION="v0.1.1"
+DEFAULT_VERSION="v0.2.1"
 INSTALL_DIR="${UNFUCK_INSTALL_DIR:-$HOME/.local/bin}"
 
 # ANSI color codes
@@ -147,7 +147,8 @@ main() {
     info "Install directory: ${INSTALL_DIR}"
 
     ARCHIVE_NAME="unfuck-${VERSION}-${OS}-${ARCH}.tar.gz"
-    RELEASE_URL="https://github.com/${REPO}/releases/download/${VERSION}/${ARCHIVE_NAME}"
+    BASE_URL="${UNFUCK_BASE_URL:-https://github.com/${REPO}/releases/download/${VERSION}}"
+    RELEASE_URL="${BASE_URL}/${ARCHIVE_NAME}"
     CHECKSUM_URL="${RELEASE_URL}.sha256"
 
     TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t 'unfuck-install')"
