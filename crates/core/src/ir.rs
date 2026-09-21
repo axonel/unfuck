@@ -8,10 +8,7 @@ use std::path::PathBuf;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum RequirementKind {
     /// Language or runtime requirement (e.g. Python >= 3.11, Node >= 20.0.0).
-    Runtime {
-        name: String,
-        constraint: String,
-    },
+    Runtime { name: String, constraint: String },
     /// Package manager requirement (e.g. bun >= 1.0, uv, pnpm).
     PackageManager {
         name: String,
@@ -34,17 +31,11 @@ pub enum RequirementKind {
         required: bool,
     },
     /// Operating system requirement.
-    Os {
-        name: String,
-    },
+    Os { name: String },
     /// CPU architecture requirement.
-    Arch {
-        name: String,
-    },
+    Arch { name: String },
     /// Minimum physical or available memory.
-    Memory {
-        min_bytes: u64,
-    },
+    Memory { min_bytes: u64 },
 }
 
 /// A specific requirement declared by a project, with evidence.
@@ -123,15 +114,21 @@ pub struct MachineCapability {
 
 impl MachineCapability {
     pub fn find_runtime(&self, name: &str) -> Option<&Runtime> {
-        self.runtimes.iter().find(|r| r.name.eq_ignore_ascii_case(name))
+        self.runtimes
+            .iter()
+            .find(|r| r.name.eq_ignore_ascii_case(name))
     }
 
     pub fn find_service(&self, name: &str) -> Option<&Service> {
-        self.services.iter().find(|s| s.name.eq_ignore_ascii_case(name))
+        self.services
+            .iter()
+            .find(|s| s.name.eq_ignore_ascii_case(name))
     }
 
     pub fn is_port_occupied(&self, port: u16) -> Option<&PortInfo> {
-        self.listening_ports.iter().find(|p| p.port == port && matches!(p.state, PortState::Occupied { .. }))
+        self.listening_ports
+            .iter()
+            .find(|p| p.port == port && matches!(p.state, PortState::Occupied { .. }))
     }
 }
 

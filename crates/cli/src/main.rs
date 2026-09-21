@@ -62,111 +62,114 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     match &cli.command {
-        Some(Commands::Scan { path }) => {
-            match analyze_project(path) {
-                Ok(proj) => {
-                    let mach = scan_machine();
-                    if cli.json {
-                        let scan_json = serde_json::json!({
-                            "project": proj,
-                            "machine": mach,
-                        });
-                        println!("{}", serde_json::to_string_pretty(&scan_json).unwrap());
-                    } else {
-                        format::print_banner();
-                        println!("Project: {}", path.display());
-                        println!("Languages: {:?}", proj.languages);
-                        println!("Requirements: {}", proj.requirements.len());
-                        println!("Machine OS: {}", mach.os);
-                        println!("Machine Arch: {}", mach.arch);
-                        println!("Discovered runtimes: {}", mach.runtimes.len());
-                        for r in &mach.runtimes {
-                            println!("  - {} {} ({})", r.name, r.version, r.executable_path.display());
-                        }
+        Some(Commands::Scan { path }) => match analyze_project(path) {
+            Ok(proj) => {
+                let mach = scan_machine();
+                if cli.json {
+                    let scan_json = serde_json::json!({
+                        "project": proj,
+                        "machine": mach,
+                    });
+                    println!("{}", serde_json::to_string_pretty(&scan_json).unwrap());
+                } else {
+                    format::print_banner();
+                    println!("Project: {}", path.display());
+                    println!("Languages: {:?}", proj.languages);
+                    println!("Requirements: {}", proj.requirements.len());
+                    println!("Machine OS: {}", mach.os);
+                    println!("Machine Arch: {}", mach.arch);
+                    println!("Discovered runtimes: {}", mach.runtimes.len());
+                    for r in &mach.runtimes {
+                        println!(
+                            "  - {} {} ({})",
+                            r.name,
+                            r.version,
+                            r.executable_path.display()
+                        );
                     }
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("Error scanning project: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+
+        Some(Commands::Predict { path }) => match execute_pipeline(path) {
+            Ok(out) => {
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&out.predictions).unwrap()
+                    );
+                } else {
+                    format::print_banner();
+                    println!("Predicted Failures: {}", out.predictions.len());
+                    for pred in &out.predictions {
+                        println!("- [{}] {}: {}", pred.confidence, pred.title, pred.summary);
+                    }
+                }
+                if out.predictions.is_empty() {
                     ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error scanning project: {}", e);
-                    ExitCode::FAILURE
+                } else {
+                    ExitCode::from(1)
                 }
             }
-        }
-
-        Some(Commands::Predict { path }) => {
-            match execute_pipeline(path) {
-                Ok(out) => {
-                    if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&out.predictions).unwrap());
-                    } else {
-                        format::print_banner();
-                        println!("Predicted Failures: {}", out.predictions.len());
-                        for pred in &out.predictions {
-                            println!("- [{}] {}: {}", pred.confidence, pred.title, pred.summary);
-                        }
-                    }
-                    if out.predictions.is_empty() {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error running prediction: {}", e);
-                    ExitCode::FAILURE
-                }
+            Err(e) => {
+                eprintln!("Error running prediction: {}", e);
+                ExitCode::FAILURE
             }
-        }
+        },
 
-        Some(Commands::Explain { path, target }) => {
-            match execute_pipeline(path) {
-                Ok(out) => {
-                    let filtered: Vec<Diagnosis> = if let Some(t) = target {
-                        out.diagnoses
-                            .into_iter()
-                            .filter(|d| {
-                                d.affected_components.iter().any(|c| c.contains(t))
-                                    || d.problem.to_lowercase().contains(&t.to_lowercase())
-                            })
-                            .collect()
-                    } else {
-                        out.diagnoses
-                    };
+        Some(Commands::Explain { path, target }) => match execute_pipeline(path) {
+            Ok(out) => {
+                let filtered: Vec<Diagnosis> = if let Some(t) = target {
+                    out.diagnoses
+                        .into_iter()
+                        .filter(|d| {
+                            d.affected_components.iter().any(|c| c.contains(t))
+                                || d.problem.to_lowercase().contains(&t.to_lowercase())
+                        })
+                        .collect()
+                } else {
+                    out.diagnoses
+                };
 
-                    if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&filtered).unwrap());
-                    } else {
-                        format::print_diagnoses(&filtered, cli.verbose);
-                    }
+                if cli.json {
+                    println!("{}", serde_json::to_string_pretty(&filtered).unwrap());
+                } else {
+                    format::print_diagnoses(&filtered, cli.verbose);
+                }
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("Error generating explanation: {}", e);
+                ExitCode::FAILURE
+            }
+        },
+
+        Some(Commands::Verify { path }) => match execute_pipeline(path) {
+            Ok(out) => {
+                if cli.json {
+                    println!(
+                        "{}",
+                        serde_json::to_string_pretty(&out.verification).unwrap()
+                    );
+                } else {
+                    format::print_verification(&out.verification);
+                }
+                if out.verification.success {
                     ExitCode::SUCCESS
-                }
-                Err(e) => {
-                    eprintln!("Error generating explanation: {}", e);
-                    ExitCode::FAILURE
+                } else {
+                    ExitCode::from(1)
                 }
             }
-        }
-
-        Some(Commands::Verify { path }) => {
-            match execute_pipeline(path) {
-                Ok(out) => {
-                    if cli.json {
-                        println!("{}", serde_json::to_string_pretty(&out.verification).unwrap());
-                    } else {
-                        format::print_verification(&out.verification);
-                    }
-                    if out.verification.success {
-                        ExitCode::SUCCESS
-                    } else {
-                        ExitCode::from(1)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("Error executing verification: {}", e);
-                    ExitCode::FAILURE
-                }
+            Err(e) => {
+                eprintln!("Error executing verification: {}", e);
+                ExitCode::FAILURE
             }
-        }
+        },
 
         None => {
             // Default command: unfuck [PATH]

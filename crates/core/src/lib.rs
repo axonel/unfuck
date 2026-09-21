@@ -23,7 +23,11 @@ mod tests {
 
     #[test]
     fn test_evidence_serialization() {
-        let ev = Evidence::from_repo_file(PathBuf::from("package.json"), Some(12), "engines.node constraint");
+        let ev = Evidence::from_repo_file(
+            PathBuf::from("package.json"),
+            Some(12),
+            "engines.node constraint",
+        );
         let json = serde_json::to_string(&ev).expect("serialize evidence");
         assert!(json.contains("package.json"));
         assert!(json.contains("HIGH"));
@@ -45,7 +49,11 @@ mod tests {
                     name: "python".to_string(),
                     constraint: ">= 3.11".to_string(),
                 },
-                evidence: Evidence::from_repo_file(PathBuf::from("pyproject.toml"), Some(5), "requires-python >= 3.11"),
+                evidence: Evidence::from_repo_file(
+                    PathBuf::from("pyproject.toml"),
+                    Some(5),
+                    "requires-python >= 3.11",
+                ),
             }],
             declared_ports: vec![8000],
             env_vars: vec!["DATABASE_URL".to_string()],
@@ -64,7 +72,11 @@ mod tests {
                 name: "python".to_string(),
                 version: "3.10.12".to_string(),
                 executable_path: PathBuf::from("/usr/bin/python3"),
-                evidence: Evidence::from_executable(PathBuf::from("/usr/bin/python3"), "Python 3.10.12", "python3 --version"),
+                evidence: Evidence::from_executable(
+                    PathBuf::from("/usr/bin/python3"),
+                    "Python 3.10.12",
+                    "python3 --version",
+                ),
             }],
             services: vec![],
             listening_ports: vec![PortInfo {
@@ -94,7 +106,8 @@ mod tests {
         assert!(serialized.contains("3.10.12"));
         assert!(serialized.contains("8000"));
 
-        let deserialized: EnvironmentModel = serde_json::from_str(&serialized).expect("deserialize env model");
+        let deserialized: EnvironmentModel =
+            serde_json::from_str(&serialized).expect("deserialize env model");
         assert_eq!(deserialized, env);
     }
 }

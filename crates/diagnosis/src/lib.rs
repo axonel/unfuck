@@ -26,7 +26,10 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
         let matching_trace = traces.iter().find(|t| t.constraint == pred.constraint);
 
         let (root_cause, causal_chain) = match &pred.constraint {
-            Constraint::RuntimeVersion { runtime, constraint_str } => {
+            Constraint::RuntimeVersion {
+                runtime,
+                constraint_str,
+            } => {
                 let actual_state = matching_trace
                     .and_then(|t| t.machine_state.as_deref())
                     .unwrap_or("runtime missing or version incompatible");
@@ -56,7 +59,10 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                 (format!("port:{}.free", port), chain)
             }
 
-            Constraint::ServiceRunning { service, min_version } => {
+            Constraint::ServiceRunning {
+                service,
+                min_version,
+            } => {
                 let ver_clause = min_version
                     .as_deref()
                     .map(|v| format!(" >= {}", v))
@@ -67,9 +73,15 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
 
                 let chain = vec![
                     format!("Host service state: {}", actual_state),
-                    format!("Project specification: depends on active service {}{}", service, ver_clause),
+                    format!(
+                        "Project specification: depends on active service {}{}",
+                        service, ver_clause
+                    ),
                     format!("Violated invariant: service.{}.status == RUNNING", service),
-                    format!("Downstream impact: application connections to {} will be refused", service),
+                    format!(
+                        "Downstream impact: application connections to {} will be refused",
+                        service
+                    ),
                 ];
 
                 (format!("service.{}.running", service), chain)
@@ -91,7 +103,10 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                     format!("Host environment state: variable '{}' is unset", key),
                     format!("Project specification: requires '{}' in environment", key),
                     format!("Violated invariant: env.contains('{}')", key),
-                    format!("Downstream impact: application configuration lookup for '{}' will fail", key),
+                    format!(
+                        "Downstream impact: application configuration lookup for '{}' will fail",
+                        key
+                    ),
                 ];
 
                 (format!("env.{}.present", key), chain)
@@ -102,7 +117,8 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                     "Host OS differs from project expectations".to_string(),
                     format!("Project specification: requires OS '{}'", expected_os),
                     format!("Violated invariant: host.os == '{}'", expected_os),
-                    "Downstream impact: platform-specific scripts or binaries will fail".to_string(),
+                    "Downstream impact: platform-specific scripts or binaries will fail"
+                        .to_string(),
                 ];
 
                 (format!("os.match({})", expected_os), chain)
@@ -111,9 +127,13 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
             Constraint::ArchMatch { expected_arch } => {
                 let chain = vec![
                     "Host architecture differs from project expectations".to_string(),
-                    format!("Project specification: requires architecture '{}'", expected_arch),
+                    format!(
+                        "Project specification: requires architecture '{}'",
+                        expected_arch
+                    ),
                     format!("Violated invariant: host.arch == '{}'", expected_arch),
-                    "Downstream impact: native compilation or prebuilt binary execution will fail".to_string(),
+                    "Downstream impact: native compilation or prebuilt binary execution will fail"
+                        .to_string(),
                 ];
 
                 (format!("arch.match({})", expected_arch), chain)

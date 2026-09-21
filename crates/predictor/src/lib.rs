@@ -36,9 +36,16 @@ pub fn predict_failures(
     let mut predictions = Vec::new();
 
     for eval in evaluated_constraints {
-        if let ConstraintStatus::Violated { reason, root_cause_hint: _ } = &eval.status {
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint: _,
+        } = &eval.status
+        {
             match &eval.constraint {
-                Constraint::RuntimeVersion { runtime, constraint_str } => {
+                Constraint::RuntimeVersion {
+                    runtime,
+                    constraint_str,
+                } => {
                     let affected = if model.project.languages.iter().any(|l| l.contains(runtime)) {
                         vec![runtime.clone(), "build".to_string(), "startup".to_string()]
                     } else {
@@ -76,7 +83,10 @@ pub fn predict_failures(
                     });
                 }
 
-                Constraint::ServiceRunning { service, min_version } => {
+                Constraint::ServiceRunning {
+                    service,
+                    min_version,
+                } => {
                     let version_str = min_version
                         .as_deref()
                         .map(|v| format!(" (version >= {})", v))
@@ -221,7 +231,10 @@ mod tests {
 
         let predictions = predict_failures(&env_model, &[eval]);
         assert_eq!(predictions.len(), 1);
-        assert_eq!(predictions[0].category, PredictionCategory::RuntimeIncompatibility);
+        assert_eq!(
+            predictions[0].category,
+            PredictionCategory::RuntimeIncompatibility
+        );
         assert_eq!(predictions[0].confidence, Confidence::High);
     }
 }

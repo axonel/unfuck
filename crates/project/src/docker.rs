@@ -20,11 +20,7 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
     let dockerfile_path = root.join("Dockerfile");
     if dockerfile_path.exists() {
         docker_used = true;
-        let ev = Evidence::from_repo_file(
-            PathBuf::from("Dockerfile"),
-            None,
-            "Dockerfile detected",
-        );
+        let ev = Evidence::from_repo_file(PathBuf::from("Dockerfile"), None, "Dockerfile detected");
         evidence.push(ev);
 
         if let Ok(content) = fs::read_to_string(&dockerfile_path) {
@@ -103,7 +99,10 @@ pub fn analyze_docker(root: &Path) -> DockerDiscovery {
 
                     if in_ports {
                         if trimmed.starts_with("- ") {
-                            let port_entry = trimmed.trim_start_matches("- ").trim_matches('"').trim_matches('\'');
+                            let port_entry = trimmed
+                                .trim_start_matches("- ")
+                                .trim_matches('"')
+                                .trim_matches('\'');
                             // Format: "HOST:CONTAINER" e.g. "3000:3000" or "127.0.0.1:5432:5432"
                             let parts: Vec<&str> = port_entry.split(':').collect();
                             let host_port_str = if parts.len() >= 2 {

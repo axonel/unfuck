@@ -166,12 +166,19 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
 
                 // Dependencies: check if pg or postgres or prisma is used
                 let check_db_dep = |dep_name: &str| -> bool {
-                    let in_deps = json.get("dependencies").and_then(|d| d.get(dep_name)).is_some();
-                    let in_dev = json.get("devDependencies").and_then(|d| d.get(dep_name)).is_some();
+                    let in_deps = json
+                        .get("dependencies")
+                        .and_then(|d| d.get(dep_name))
+                        .is_some();
+                    let in_dev = json
+                        .get("devDependencies")
+                        .and_then(|d| d.get(dep_name))
+                        .is_some();
                     in_deps || in_dev
                 };
 
-                if check_db_dep("pg") || check_db_dep("postgres") || check_db_dep("@prisma/client") {
+                if check_db_dep("pg") || check_db_dep("postgres") || check_db_dep("@prisma/client")
+                {
                     let ev = Evidence::from_repo_file(
                         PathBuf::from("package.json"),
                         None,
@@ -205,7 +212,11 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
 pub fn scan_text_for_ports(text: &str, ports: &mut Vec<u16>) {
     // Check for PORT=1234 or --port 1234 or -p 1234
     for word in text.split_whitespace() {
-        if let Some(val) = word.strip_prefix("PORT=").or_else(|| word.strip_prefix("--port=")).or_else(|| word.strip_prefix("-p=")) {
+        if let Some(val) = word
+            .strip_prefix("PORT=")
+            .or_else(|| word.strip_prefix("--port="))
+            .or_else(|| word.strip_prefix("-p="))
+        {
             if let Ok(p) = val.parse::<u16>() {
                 if !ports.contains(&p) && p > 0 {
                     ports.push(p);

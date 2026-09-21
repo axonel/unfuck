@@ -15,7 +15,11 @@ fn parse_first_semantic_version(output: &str) -> Option<String> {
     for word in output.split_whitespace() {
         let clean = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
         let parts: Vec<&str> = clean.split('.').collect();
-        if parts.len() >= 2 && parts.iter().all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit())) {
+        if parts.len() >= 2
+            && parts
+                .iter()
+                .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+        {
             return Some(clean.to_string());
         }
     }
@@ -177,11 +181,20 @@ mod tests {
 
     #[test]
     fn test_parse_versions() {
-        assert_eq!(parse_python_version("Python 3.12.4\n").as_deref(), Some("3.12.4"));
+        assert_eq!(
+            parse_python_version("Python 3.12.4\n").as_deref(),
+            Some("3.12.4")
+        );
         assert_eq!(parse_node_version("v20.10.0\n").as_deref(), Some("20.10.0"));
         assert_eq!(parse_bun_version("1.1.20\n").as_deref(), Some("1.1.20"));
-        assert_eq!(parse_rust_version("rustc 1.80.0 (051478957 2024-07-21)\n").as_deref(), Some("1.80.0"));
-        assert_eq!(parse_go_version("go version go1.22.4 linux/amd64\n").as_deref(), Some("1.22.4"));
+        assert_eq!(
+            parse_rust_version("rustc 1.80.0 (051478957 2024-07-21)\n").as_deref(),
+            Some("1.80.0")
+        );
+        assert_eq!(
+            parse_go_version("go version go1.22.4 linux/amd64\n").as_deref(),
+            Some("1.22.4")
+        );
         assert_eq!(
             parse_java_version("openjdk version \"21.0.3\" 2024-04-16\n").as_deref(),
             Some("21.0.3")

@@ -41,7 +41,10 @@ pub fn analyze_tool_versions(root: &Path) -> ToolVersionsDiscovery {
                     let ev = Evidence::from_repo_file(
                         PathBuf::from(".tool-versions"),
                         Some(idx + 1),
-                        format!("Tool '{}' version {} declared in .tool-versions", normalized_tool, ver),
+                        format!(
+                            "Tool '{}' version {} declared in .tool-versions",
+                            normalized_tool, ver
+                        ),
                     );
 
                     let kind = match normalized_tool {
@@ -95,7 +98,10 @@ pub fn analyze_tool_versions(root: &Path) -> ToolVersionsDiscovery {
                             let ev = Evidence::from_repo_file(
                                 PathBuf::from("mise.toml"),
                                 None,
-                                format!("Tool '{}' version {} declared in mise.toml", normalized_tool, ver),
+                                format!(
+                                    "Tool '{}' version {} declared in mise.toml",
+                                    normalized_tool, ver
+                                ),
                             );
 
                             let kind = match normalized_tool {

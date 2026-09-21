@@ -56,7 +56,9 @@ fn build_inode_process_map() -> HashMap<u64, (u32, String)> {
                                             .ok()
                                             .map(|s| s.trim().to_string());
                                     }
-                                    let comm = process_name.clone().unwrap_or_else(|| "unknown".to_string());
+                                    let comm = process_name
+                                        .clone()
+                                        .unwrap_or_else(|| "unknown".to_string());
                                     map.insert(inode, (pid, comm));
                                 }
                             }
@@ -91,7 +93,10 @@ pub fn scan_listening_ports() -> Vec<PortInfo> {
         };
 
         let description = match (&pid, &process_name) {
-            (Some(p), Some(name)) => format!("Port {} is occupied by process '{}' (PID {})", port, name, p),
+            (Some(p), Some(name)) => format!(
+                "Port {} is occupied by process '{}' (PID {})",
+                port, name, p
+            ),
             (Some(p), None) => format!("Port {} is occupied by PID {}", port, p),
             _ => format!("Port {} is in TCP_LISTEN state (inode {})", port, inode),
         };
@@ -118,7 +123,10 @@ pub fn scan_listening_ports() -> Vec<PortInfo> {
 
 /// Check whether a specific port is free by testing bind or checking known listening ports.
 pub fn is_port_available(port: u16, known_occupied: &[PortInfo]) -> bool {
-    if known_occupied.iter().any(|p| p.port == port && matches!(p.state, PortState::Occupied { .. })) {
+    if known_occupied
+        .iter()
+        .any(|p| p.port == port && matches!(p.state, PortState::Occupied { .. }))
+    {
         return false;
     }
     // Double check with a quick local bind test

@@ -11,7 +11,13 @@ use unfuck_verifier::verify_environment;
 
 fn fixtures_dir() -> PathBuf {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    manifest_dir.parent().unwrap().parent().unwrap().join("tests").join("fixtures")
+    manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests")
+        .join("fixtures")
 }
 
 #[test]
@@ -20,7 +26,9 @@ fn test_fixture_analysis_node() {
     let manifest = analyze_project(&fixture_path).expect("analyze healthy-node-app");
 
     assert_eq!(manifest.name, "healthy-node-app");
-    assert!(manifest.languages.contains(&"javascript/typescript".to_string()));
+    assert!(manifest
+        .languages
+        .contains(&"javascript/typescript".to_string()));
     let node_req = manifest.requirements.iter().find(|r| r.name == "node");
     assert!(node_req.is_some());
 }
@@ -62,8 +70,13 @@ fn test_broken_node_version_prediction() {
     let diagnoses = diagnose_all(&predictions, &traces);
 
     // Because broken-node-version requires node >= 99.0.0, this MUST be predicted as a failure
-    assert!(!predictions.is_empty(), "Should predict failure for node >= 99.0.0");
-    let node_pred = predictions.iter().find(|p| p.category == PredictionCategory::RuntimeIncompatibility);
+    assert!(
+        !predictions.is_empty(),
+        "Should predict failure for node >= 99.0.0"
+    );
+    let node_pred = predictions
+        .iter()
+        .find(|p| p.category == PredictionCategory::RuntimeIncompatibility);
     assert!(node_pred.is_some());
     let pred = node_pred.unwrap();
     assert_eq!(pred.confidence, Confidence::High);
@@ -90,8 +103,13 @@ fn test_broken_python_version_prediction() {
     let diagnoses = diagnose_all(&predictions, &traces);
 
     // broken-python-version requires python >= 3.99.0
-    assert!(!predictions.is_empty(), "Should predict failure for python >= 3.99.0");
-    let py_pred = predictions.iter().find(|p| p.category == PredictionCategory::RuntimeIncompatibility);
+    assert!(
+        !predictions.is_empty(),
+        "Should predict failure for python >= 3.99.0"
+    );
+    let py_pred = predictions
+        .iter()
+        .find(|p| p.category == PredictionCategory::RuntimeIncompatibility);
     assert!(py_pred.is_some());
     assert_eq!(py_pred.unwrap().confidence, Confidence::High);
 
@@ -131,7 +149,9 @@ fn test_port_collision_prediction() {
     let traces = graph.all_causal_traces();
     let diagnoses = diagnose_all(&predictions, &traces);
 
-    let port_pred = predictions.iter().find(|p| p.category == PredictionCategory::PortCollision);
+    let port_pred = predictions
+        .iter()
+        .find(|p| p.category == PredictionCategory::PortCollision);
     assert!(port_pred.is_some(), "Port collision should be predicted");
     assert_eq!(port_pred.unwrap().confidence, Confidence::High);
 

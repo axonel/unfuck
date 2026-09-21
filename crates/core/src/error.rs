@@ -21,10 +21,7 @@ pub enum UnfuckError {
     Graph(String),
 
     #[error("Invalid version constraint '{constraint}': {reason}")]
-    InvalidVersionConstraint {
-        constraint: String,
-        reason: String,
-    },
+    InvalidVersionConstraint { constraint: String, reason: String },
 
     #[error("Verification error: {0}")]
     Verification(String),

@@ -7,9 +7,7 @@ use unfuck_core::Confidence;
 /// Parse PATH into a list of existing directories.
 pub fn parse_path_entries() -> Vec<PathBuf> {
     let path_var = env::var("PATH").unwrap_or_default();
-    env::split_paths(&path_var)
-        .filter(|p| p.is_dir())
-        .collect()
+    env::split_paths(&path_var).filter(|p| p.is_dir()).collect()
 }
 
 /// Collect relevant dev environment variables.

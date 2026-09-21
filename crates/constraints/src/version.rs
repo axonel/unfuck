@@ -39,7 +39,9 @@ pub fn normalize_semver(ver: &str) -> String {
             }
         }
         2 => {
-            if parts[0].chars().all(|c| c.is_ascii_digit()) && parts[1].chars().all(|c| c.is_ascii_digit()) {
+            if parts[0].chars().all(|c| c.is_ascii_digit())
+                && parts[1].chars().all(|c| c.is_ascii_digit())
+            {
                 format!("{}.{}.0", parts[0], parts[1])
             } else {
                 clean.to_string()

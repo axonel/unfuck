@@ -19,15 +19,9 @@ pub enum EvidenceSource {
         exit_code: i32,
     },
     /// Derived from operating system metadata (e.g. /etc/os-release, uname).
-    OsMetadata {
-        key: String,
-        value: String,
-    },
+    OsMetadata { key: String, value: String },
     /// Probed network state (e.g. port scan, socket check).
-    NetworkProbe {
-        target: String,
-        outcome: String,
-    },
+    NetworkProbe { target: String, outcome: String },
     /// Probed process table (/proc or sysinfo).
     ProcessInspection {
         pid: u32,
@@ -35,14 +29,9 @@ pub enum EvidenceSource {
         cmdline: Option<String>,
     },
     /// Environment variable from machine or shell.
-    EnvironmentVariable {
-        key: String,
-        value: Option<String>,
-    },
+    EnvironmentVariable { key: String, value: Option<String> },
     /// Direct runtime or filesystem observation.
-    DirectObservation {
-        detail: String,
-    },
+    DirectObservation { detail: String },
 }
 
 /// Traceable evidence supporting an observation, constraint, or diagnosis.
@@ -57,7 +46,11 @@ pub struct Evidence {
 }
 
 impl Evidence {
-    pub fn new(source: EvidenceSource, confidence: Confidence, description: impl Into<String>) -> Self {
+    pub fn new(
+        source: EvidenceSource,
+        confidence: Confidence,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             source,
             confidence,
@@ -65,7 +58,11 @@ impl Evidence {
         }
     }
 
-    pub fn from_repo_file(path: PathBuf, line: Option<usize>, description: impl Into<String>) -> Self {
+    pub fn from_repo_file(
+        path: PathBuf,
+        line: Option<usize>,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             source: EvidenceSource::RepositoryFile {
                 path,
@@ -77,7 +74,11 @@ impl Evidence {
         }
     }
 
-    pub fn from_executable(path: PathBuf, version_string: impl Into<String>, description: impl Into<String>) -> Self {
+    pub fn from_executable(
+        path: PathBuf,
+        version_string: impl Into<String>,
+        description: impl Into<String>,
+    ) -> Self {
         Self {
             source: EvidenceSource::ExecutableInspection {
                 path,

@@ -6,7 +6,10 @@ use unfuck_predictor::Prediction;
 use unfuck_verifier::VerificationReport;
 
 pub fn print_banner() {
-    println!("{}", "UNFUCK — Development Environment Engine".bold().cyan());
+    println!(
+        "{}",
+        "UNFUCK — Development Environment Engine".bold().cyan()
+    );
     println!("{}", "──────────────────────────────────────────".dimmed());
 }
 
@@ -41,7 +44,10 @@ pub fn print_human_summary(
         println!();
         println!("{}", "No known blockers.".green());
     } else {
-        let violations_count = evaluated_constraints.iter().filter(|c| c.is_violated()).count();
+        let violations_count = evaluated_constraints
+            .iter()
+            .filter(|c| c.is_violated())
+            .count();
         println!(
             "{}",
             format!(
@@ -71,7 +77,10 @@ pub fn print_human_summary(
                     println!("             project evidence: {}", p_ev.description.cyan());
                 }
                 if let Some(ref m_ev) = pred.machine_evidence {
-                    println!("             machine evidence: {}", m_ev.description.magenta());
+                    println!(
+                        "             machine evidence: {}",
+                        m_ev.description.magenta()
+                    );
                 }
             }
         }
@@ -89,16 +98,25 @@ pub fn print_diagnoses(diagnoses: &[Diagnosis], verbose: bool) {
     println!();
 
     if diagnoses.is_empty() {
-        println!("{}", "No environment failures diagnosed. All invariants hold.".green());
+        println!(
+            "{}",
+            "No environment failures diagnosed. All invariants hold.".green()
+        );
         return;
     }
 
     for (idx, diag) in diagnoses.iter().enumerate() {
         println!("{}. {}", idx + 1, diag.problem.bold().red());
-        println!("   Root Cause:          {}", diag.root_cause.bold().yellow());
+        println!(
+            "   Root Cause:          {}",
+            diag.root_cause.bold().yellow()
+        );
         println!("   Violated Constraint: {}", diag.violated_constraint);
         println!("   Confidence:          {}", diag.confidence);
-        println!("   Affected Components: {}", diag.affected_components.join(", "));
+        println!(
+            "   Affected Components: {}",
+            diag.affected_components.join(", ")
+        );
         println!();
         println!("   Causal Chain:");
         for (step_num, step) in diag.causal_chain.iter().enumerate() {
@@ -112,10 +130,16 @@ pub fn print_diagnoses(diagnoses: &[Diagnosis], verbose: bool) {
 
         if verbose {
             if let Some(ref p_ev) = diag.project_evidence {
-                println!("   Project Evidence:    {} ({:?})", p_ev.description, p_ev.source);
+                println!(
+                    "   Project Evidence:    {} ({:?})",
+                    p_ev.description, p_ev.source
+                );
             }
             if let Some(ref m_ev) = diag.machine_evidence {
-                println!("   Machine Evidence:    {} ({:?})", m_ev.description, m_ev.source);
+                println!(
+                    "   Machine Evidence:    {} ({:?})",
+                    m_ev.description, m_ev.source
+                );
             }
             println!();
         }
@@ -139,7 +163,10 @@ pub fn print_verification(report: &VerificationReport) {
             "FAILED".bold().red()
         };
 
-        println!("  {} [{}] {:<25} {}", mark, status, check.name, check.message);
+        println!(
+            "  {} [{}] {:<25} {}",
+            mark, status, check.name, check.message
+        );
     }
 
     println!();

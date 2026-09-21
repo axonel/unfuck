@@ -4,7 +4,9 @@ pub mod version;
 
 pub use evaluator::{evaluate_all, evaluate_constraint, requirement_to_constraint};
 pub use model::{Constraint, ConstraintStatus, EvaluatedConstraint};
-pub use version::{matches_version_constraint, normalize_semver, parse_version_req, VersionComparator};
+pub use version::{
+    matches_version_constraint, normalize_semver, parse_version_req, VersionComparator,
+};
 
 #[cfg(test)]
 mod tests {
@@ -13,8 +15,8 @@ mod tests {
     use std::path::PathBuf;
     use unfuck_core::evidence::{Evidence, EvidenceSource};
     use unfuck_core::ir::{
-        MachineCapability, PortInfo, PortState, ProjectRequirement, RequirementKind, Runtime, Service,
-        ServiceStatus,
+        MachineCapability, PortInfo, PortState, ProjectRequirement, RequirementKind, Runtime,
+        Service, ServiceStatus,
     };
     use unfuck_core::Confidence;
 
@@ -31,13 +33,21 @@ mod tests {
                     name: "python".to_string(),
                     version: "3.10.12".to_string(),
                     executable_path: PathBuf::from("/usr/bin/python3"),
-                    evidence: Evidence::from_executable(PathBuf::from("/usr/bin/python3"), "Python 3.10.12", "python3 --version"),
+                    evidence: Evidence::from_executable(
+                        PathBuf::from("/usr/bin/python3"),
+                        "Python 3.10.12",
+                        "python3 --version",
+                    ),
                 },
                 Runtime {
                     name: "node".to_string(),
                     version: "20.11.0".to_string(),
                     executable_path: PathBuf::from("/usr/bin/node"),
-                    evidence: Evidence::from_executable(PathBuf::from("/usr/bin/node"), "v20.11.0", "node --version"),
+                    evidence: Evidence::from_executable(
+                        PathBuf::from("/usr/bin/node"),
+                        "v20.11.0",
+                        "node --version",
+                    ),
                 },
             ],
             services: vec![Service {
@@ -85,7 +95,11 @@ mod tests {
         };
         let eval = evaluate_constraint(&constraint, &machine, None);
         assert!(eval.is_violated());
-        if let ConstraintStatus::Violated { reason, root_cause_hint } = eval.status {
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint,
+        } = eval.status
+        {
             assert!(reason.contains("3.10.12"));
             assert_eq!(root_cause_hint, "python.version_mismatch");
         } else {
@@ -142,7 +156,11 @@ mod tests {
                     name: "python".to_string(),
                     constraint: ">= 3.11".to_string(),
                 },
-                evidence: Evidence::from_repo_file(PathBuf::from("pyproject.toml"), None, "py >= 3.11"),
+                evidence: Evidence::from_repo_file(
+                    PathBuf::from("pyproject.toml"),
+                    None,
+                    "py >= 3.11",
+                ),
             },
             ProjectRequirement {
                 name: "port:3000".to_string(),
@@ -150,7 +168,11 @@ mod tests {
                     port: 3000,
                     service_hint: None,
                 },
-                evidence: Evidence::from_repo_file(PathBuf::from("package.json"), None, "port 3000"),
+                evidence: Evidence::from_repo_file(
+                    PathBuf::from("package.json"),
+                    None,
+                    "port 3000",
+                ),
             },
         ];
 

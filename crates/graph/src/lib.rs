@@ -12,7 +12,8 @@ mod tests {
     use unfuck_constraints::model::{Constraint, ConstraintStatus, EvaluatedConstraint};
     use unfuck_core::evidence::Evidence;
     use unfuck_core::ir::{
-        EnvironmentModel, MachineCapability, ProjectManifest, ProjectRequirement, RequirementKind, Runtime,
+        EnvironmentModel, MachineCapability, ProjectManifest, ProjectRequirement, RequirementKind,
+        Runtime,
     };
 
     #[test]
@@ -28,7 +29,11 @@ mod tests {
                     name: "python".to_string(),
                     constraint: ">= 3.11".to_string(),
                 },
-                evidence: Evidence::from_repo_file(PathBuf::from("pyproject.toml"), Some(10), "requires-python >= 3.11"),
+                evidence: Evidence::from_repo_file(
+                    PathBuf::from("pyproject.toml"),
+                    Some(10),
+                    "requires-python >= 3.11",
+                ),
             }],
             declared_ports: vec![],
             env_vars: vec![],
@@ -47,7 +52,11 @@ mod tests {
                 name: "python".to_string(),
                 version: "3.10.12".to_string(),
                 executable_path: PathBuf::from("/usr/bin/python3"),
-                evidence: Evidence::from_executable(PathBuf::from("/usr/bin/python3"), "Python 3.10.12", "python3 --version"),
+                evidence: Evidence::from_executable(
+                    PathBuf::from("/usr/bin/python3"),
+                    "Python 3.10.12",
+                    "python3 --version",
+                ),
             }],
             services: vec![],
             listening_ports: vec![],
@@ -64,7 +73,8 @@ mod tests {
                 constraint_str: ">= 3.11".to_string(),
             },
             status: ConstraintStatus::Violated {
-                reason: "Runtime 'python' version 3.10.12 does not satisfy requirement >= 3.11".to_string(),
+                reason: "Runtime 'python' version 3.10.12 does not satisfy requirement >= 3.11"
+                    .to_string(),
                 root_cause_hint: "python.version_mismatch".to_string(),
             },
             project_evidence: Some(Evidence::from_repo_file(
@@ -83,7 +93,9 @@ mod tests {
         let violations = graph.find_violations();
         assert_eq!(violations.len(), 1);
 
-        let trace = graph.trace_causal_chain(violations[0]).expect("causal trace");
+        let trace = graph
+            .trace_causal_chain(violations[0])
+            .expect("causal trace");
         assert!(trace.project_evidence.is_some());
         assert!(trace.machine_state.is_some());
         assert!(trace.machine_state.unwrap().contains("3.10.12"));

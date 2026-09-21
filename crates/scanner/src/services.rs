@@ -50,13 +50,19 @@ pub fn probe_docker(path_entries: &[PathBuf]) -> Service {
             (
                 ServiceStatus::Running,
                 Confidence::Confirmed,
-                format!("Docker daemon is active and responsive at socket {}", sock.display()),
+                format!(
+                    "Docker daemon is active and responsive at socket {}",
+                    sock.display()
+                ),
             )
         } else {
             (
                 ServiceStatus::Stopped,
                 Confidence::High,
-                format!("Docker socket exists at {} but daemon is not responding", sock.display()),
+                format!(
+                    "Docker socket exists at {} but daemon is not responding",
+                    sock.display()
+                ),
             )
         };
 
@@ -83,7 +89,8 @@ pub fn probe_docker(path_entries: &[PathBuf]) -> Service {
             socket_path: None,
             evidence: Evidence::new(
                 EvidenceSource::DirectObservation {
-                    detail: "docker binary present in PATH but no active docker.sock found".to_string(),
+                    detail: "docker binary present in PATH but no active docker.sock found"
+                        .to_string(),
                 },
                 Confidence::High,
                 "Docker binary installed but daemon is stopped or socket missing",
@@ -117,7 +124,10 @@ pub fn probe_postgresql(path_entries: &[PathBuf], listening_ports: &[PortInfo]) 
         Path::new("/var/run/postgresql/.s.PGSQL.5432"),
         Path::new("/tmp/.s.PGSQL.5432"),
     ];
-    let found_socket = unix_sockets.iter().find(|p| p.exists()).map(|p| p.to_path_buf());
+    let found_socket = unix_sockets
+        .iter()
+        .find(|p| p.exists())
+        .map(|p| p.to_path_buf());
 
     let psql_bin = path_entries.iter().find_map(|dir| {
         let p = dir.join("psql");
@@ -150,7 +160,10 @@ pub fn probe_postgresql(path_entries: &[PathBuf], listening_ports: &[PortInfo]) 
 
     if pg_port_listening.is_some() || found_socket.is_some() {
         let desc = if let Some(ref ver) = version {
-            format!("PostgreSQL is running (version {}) listening on port 5432 / socket", ver)
+            format!(
+                "PostgreSQL is running (version {}) listening on port 5432 / socket",
+                ver
+            )
         } else {
             "PostgreSQL is running on port 5432 / unix socket".to_string()
         };

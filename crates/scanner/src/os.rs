@@ -78,7 +78,11 @@ pub fn scan_os() -> OsInfo {
             value: total_memory_bytes.to_string(),
         },
         Confidence::Confirmed,
-        format!("Total memory: {} bytes ({:.1} GB)", total_memory_bytes, total_memory_bytes as f64 / (1024.0 * 1024.0 * 1024.0)),
+        format!(
+            "Total memory: {} bytes ({:.1} GB)",
+            total_memory_bytes,
+            total_memory_bytes as f64 / (1024.0 * 1024.0 * 1024.0)
+        ),
     ));
 
     OsInfo {

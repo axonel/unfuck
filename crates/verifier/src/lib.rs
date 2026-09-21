@@ -48,19 +48,29 @@ pub fn verify_environment(
     // 2. Evaluated Constraints Checks
     for eval in evaluated_constraints {
         let (name, category) = match &eval.constraint {
-            Constraint::RuntimeVersion { runtime, .. } => (format!("runtime:{}", runtime), "runtime".to_string()),
+            Constraint::RuntimeVersion { runtime, .. } => {
+                (format!("runtime:{}", runtime), "runtime".to_string())
+            }
             Constraint::PortAvailable { port } => (format!("port:{}", port), "network".to_string()),
-            Constraint::ServiceRunning { service, .. } => (format!("service:{}", service), "service".to_string()),
+            Constraint::ServiceRunning { service, .. } => {
+                (format!("service:{}", service), "service".to_string())
+            }
             Constraint::MemoryMin { .. } => ("memory_capacity".to_string(), "resource".to_string()),
-            Constraint::EnvVarSet { key, .. } => (format!("env:{}", key), "configuration".to_string()),
+            Constraint::EnvVarSet { key, .. } => {
+                (format!("env:{}", key), "configuration".to_string())
+            }
             Constraint::OsMatch { .. } => ("os_compatibility".to_string(), "system".to_string()),
-            Constraint::ArchMatch { .. } => ("arch_compatibility".to_string(), "system".to_string()),
+            Constraint::ArchMatch { .. } => {
+                ("arch_compatibility".to_string(), "system".to_string())
+            }
         };
 
         let passed = eval.is_satisfied();
         let message = if passed {
             format!("Requirement satisfied: {}", eval.constraint)
-        } else if let unfuck_constraints::model::ConstraintStatus::Violated { reason, .. } = &eval.status {
+        } else if let unfuck_constraints::model::ConstraintStatus::Violated { reason, .. } =
+            &eval.status
+        {
             reason.clone()
         } else {
             "Status unknown".to_string()
@@ -71,7 +81,10 @@ pub fn verify_environment(
             category,
             passed,
             message,
-            evidence: eval.machine_evidence.clone().or_else(|| eval.project_evidence.clone()),
+            evidence: eval
+                .machine_evidence
+                .clone()
+                .or_else(|| eval.project_evidence.clone()),
         });
     }
 

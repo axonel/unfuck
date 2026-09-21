@@ -169,9 +169,16 @@ impl EnvironmentGraph {
         let mut machine_state: Option<String> = None;
 
         // Check outgoing edges from constraint node (SupportedBy -> Evidence)
-        for edge in self.graph.edges_directed(violation_idx, Direction::Outgoing) {
+        for edge in self
+            .graph
+            .edges_directed(violation_idx, Direction::Outgoing)
+        {
             if *edge.weight() == EdgeData::SupportedBy {
-                if let Some(NodeData::Evidence { description, confidence }) = self.graph.node_weight(edge.target()) {
+                if let Some(NodeData::Evidence {
+                    description,
+                    confidence,
+                }) = self.graph.node_weight(edge.target())
+                {
                     project_evidence = Some(Evidence::new(
                         unfuck_core::evidence::EvidenceSource::DirectObservation {
                             detail: description.clone(),
@@ -184,22 +191,35 @@ impl EnvironmentGraph {
         }
 
         // Check incoming edges to constraint node (e.g. from Runtime, Port, or Service)
-        for edge in self.graph.edges_directed(violation_idx, Direction::Incoming) {
+        for edge in self
+            .graph
+            .edges_directed(violation_idx, Direction::Incoming)
+        {
             match edge.weight() {
                 EdgeData::Violates | EdgeData::EvaluatedAs => {
                     let source_idx = edge.source();
                     if let Some(src_weight) = self.graph.node_weight(source_idx) {
                         match src_weight {
-                            NodeData::Runtime { name, version, executable_path } => {
+                            NodeData::Runtime {
+                                name,
+                                version,
+                                executable_path,
+                            } => {
                                 machine_state = Some(format!(
                                     "Runtime '{}' is installed at {} (version {})",
-                                    name, executable_path.display(), version
+                                    name,
+                                    executable_path.display(),
+                                    version
                                 ));
                             }
                             NodeData::Port { port, state } => {
                                 machine_state = Some(format!("Port {} state is {:?}", port, state));
                             }
-                            NodeData::Service { name, status, version } => {
+                            NodeData::Service {
+                                name,
+                                status,
+                                version,
+                            } => {
                                 machine_state = Some(format!(
                                     "Service '{}' status is {:?} (version {:?})",
                                     name, status, version
@@ -211,8 +231,10 @@ impl EnvironmentGraph {
                         // Also find evidence on the source machine capability node
                         for src_edge in self.graph.edges_directed(source_idx, Direction::Outgoing) {
                             if *src_edge.weight() == EdgeData::SupportedBy {
-                                if let Some(NodeData::Evidence { description, confidence }) =
-                                    self.graph.node_weight(src_edge.target())
+                                if let Some(NodeData::Evidence {
+                                    description,
+                                    confidence,
+                                }) = self.graph.node_weight(src_edge.target())
                                 {
                                     machine_evidence = Some(Evidence::new(
                                         unfuck_core::evidence::EvidenceSource::DirectObservation {

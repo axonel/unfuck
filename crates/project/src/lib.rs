@@ -106,7 +106,9 @@ mod tests {
         fs::write(dir.path().join("bun.lock"), "").unwrap();
 
         let manifest = analyze_project(dir.path()).unwrap();
-        assert!(manifest.languages.contains(&"javascript/typescript".to_string()));
+        assert!(manifest
+            .languages
+            .contains(&"javascript/typescript".to_string()));
         assert!(manifest.languages.contains(&"bun".to_string()));
         assert!(manifest.package_managers.contains(&"bun".to_string()));
         assert!(manifest.declared_ports.contains(&3000));
@@ -136,7 +138,10 @@ dependencies = [
         let py_req = manifest.requirements.iter().find(|r| r.name == "python");
         assert!(py_req.is_some());
 
-        let pg_req = manifest.requirements.iter().find(|r| r.name == "postgresql");
+        let pg_req = manifest
+            .requirements
+            .iter()
+            .find(|r| r.name == "postgresql");
         assert!(pg_req.is_some());
     }
 }

@@ -86,7 +86,10 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                     let ev = Evidence::from_repo_file(
                         PathBuf::from("pyproject.toml"),
                         None,
-                        format!("Python requirement declared in [project].requires-python: {}", req_py),
+                        format!(
+                            "Python requirement declared in [project].requires-python: {}",
+                            req_py
+                        ),
                     );
                     requirements.push(ProjectRequirement {
                         name: "python".to_string(),
@@ -110,7 +113,10 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                     let ev = Evidence::from_repo_file(
                         PathBuf::from("pyproject.toml"),
                         None,
-                        format!("Python requirement declared in Poetry dependencies: {}", poetry_py),
+                        format!(
+                            "Python requirement declared in Poetry dependencies: {}",
+                            poetry_py
+                        ),
                     );
                     requirements.push(ProjectRequirement {
                         name: "python".to_string(),
@@ -129,7 +135,10 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                         .get("project")
                         .and_then(|p| p.get("dependencies"))
                         .and_then(|d| d.as_array())
-                        .map(|arr| arr.iter().any(|v| v.as_str().map(|s| s.starts_with(name)).unwrap_or(false)))
+                        .map(|arr| {
+                            arr.iter()
+                                .any(|v| v.as_str().map(|s| s.starts_with(name)).unwrap_or(false))
+                        })
                         .unwrap_or(false);
 
                     let in_poetry = toml

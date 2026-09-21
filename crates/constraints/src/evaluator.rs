@@ -51,7 +51,10 @@ pub fn evaluate_constraint(
     project_evidence: Option<Evidence>,
 ) -> EvaluatedConstraint {
     match constraint {
-        Constraint::RuntimeVersion { runtime, constraint_str } => {
+        Constraint::RuntimeVersion {
+            runtime,
+            constraint_str,
+        } => {
             if let Some(rt) = machine.find_runtime(runtime) {
                 if matches_version_constraint(&rt.version, constraint_str) {
                     EvaluatedConstraint {
@@ -93,7 +96,10 @@ pub fn evaluate_constraint(
 
         Constraint::PortAvailable { port } => {
             if let Some(occupied_info) = machine.is_port_occupied(*port) {
-                let reason = format!("Required port {} is already in use by another process", port);
+                let reason = format!(
+                    "Required port {} is already in use by another process",
+                    port
+                );
                 let root_cause_hint = format!("port:{}.occupied", port);
                 EvaluatedConstraint {
                     constraint: constraint.clone(),
@@ -114,7 +120,10 @@ pub fn evaluate_constraint(
             }
         }
 
-        Constraint::ServiceRunning { service, min_version } => {
+        Constraint::ServiceRunning {
+            service,
+            min_version,
+        } => {
             if let Some(srv) = machine.find_service(service) {
                 if srv.status == ServiceStatus::Running {
                     if let (Some(req_ver), Some(actual_ver)) = (min_version, &srv.version) {
@@ -150,7 +159,10 @@ pub fn evaluate_constraint(
                         }
                     }
                 } else {
-                    let reason = format!("Service '{}' is present but currently stopped/inactive", service);
+                    let reason = format!(
+                        "Service '{}' is present but currently stopped/inactive",
+                        service
+                    );
                     let root_cause_hint = format!("{}.stopped", service);
                     EvaluatedConstraint {
                         constraint: constraint.clone(),
@@ -178,7 +190,10 @@ pub fn evaluate_constraint(
         }
 
         Constraint::OsMatch { expected_os } => {
-            let matches = machine.os.to_lowercase().contains(&expected_os.to_lowercase())
+            let matches = machine
+                .os
+                .to_lowercase()
+                .contains(&expected_os.to_lowercase())
                 || machine.os_family.eq_ignore_ascii_case(expected_os);
             if matches {
                 EvaluatedConstraint {
