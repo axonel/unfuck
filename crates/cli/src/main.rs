@@ -192,10 +192,8 @@ fn main() -> ExitCode {
                         println!("{}", serde_json::to_string_pretty(&report).unwrap());
                     } else {
                         format::print_human_summary(
-                            &out.env_model.project.name,
+                            &out.env_model.project,
                             &cli.path.display().to_string(),
-                            &out.env_model.project.languages,
-                            &out.env_model.project.package_managers,
                             &out.predictions,
                             &out.evaluated_constraints,
                             cli.verbose,

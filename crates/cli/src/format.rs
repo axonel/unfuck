@@ -14,22 +14,72 @@ pub fn print_banner() {
 }
 
 pub fn print_human_summary(
-    project_name: &str,
+    project: &unfuck_core::ir::ProjectManifest,
     project_path: &str,
-    languages: &[String],
-    package_managers: &[String],
     predictions: &[Prediction],
     evaluated_constraints: &[EvaluatedConstraint],
     verbose: bool,
 ) {
     print_banner();
     println!("Project:     {}", project_path.bold());
-    println!("Name:        {}", project_name);
-    if !languages.is_empty() {
-        println!("Languages:   {}", languages.join(", "));
+    println!("Name:        {}", project.name);
+    if !project.languages.is_empty() {
+        println!("Languages:   {}", project.languages.join(", "));
     }
-    if !package_managers.is_empty() {
-        println!("Package Mgr: {}", package_managers.join(", "));
+    if !project.package_managers.is_empty() {
+        println!("Package Mgr: {}", project.package_managers.join(", "));
+    }
+    if !project.components.is_empty() {
+        let comp_strs: Vec<String> = project
+            .components
+            .iter()
+            .map(|c| format!("{} ({})", c.name.bold(), c.languages.join("/")))
+            .collect();
+        println!("Components:  {}", comp_strs.join(", "));
+    }
+    if !project.declared_ports.is_empty() {
+        let ports_str: Vec<String> = project
+            .declared_ports
+            .iter()
+            .map(|p| p.to_string())
+            .collect();
+        println!("Ports:       {}", ports_str.join(", "));
+    }
+    if !project.env_var_specs.is_empty() {
+        let required_cnt = project
+            .env_var_specs
+            .iter()
+            .filter(|s| matches!(s.category, unfuck_core::ir::EnvVarCategory::Required))
+            .count();
+        let optional_cnt = project
+            .env_var_specs
+            .iter()
+            .filter(|s| {
+                matches!(
+                    s.category,
+                    unfuck_core::ir::EnvVarCategory::OptionalWithDefault
+                )
+            })
+            .count();
+        let local_cnt = project
+            .env_var_specs
+            .iter()
+            .filter(|s| matches!(s.category, unfuck_core::ir::EnvVarCategory::ConfiguredLocal))
+            .count();
+
+        let mut parts = Vec::new();
+        if required_cnt > 0 {
+            parts.push(format!("{} required", required_cnt));
+        }
+        if optional_cnt > 0 {
+            parts.push(format!("{} with defaults", optional_cnt));
+        }
+        if local_cnt > 0 {
+            parts.push(format!("{} in local .env", local_cnt));
+        }
+        if !parts.is_empty() {
+            println!("Environment: {}", parts.join(", "));
+        }
     }
     println!();
 

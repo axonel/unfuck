@@ -534,7 +534,7 @@ checksum = "5d99f8c9a7727884afe522e9bd5edbfc91a3312b36a77b5fb8926e4c31a41801"
 
 [[package]]
 name = "unfuck"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "clap",
  "colored",
@@ -552,7 +552,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-constraints"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "semver",
  "serde",
@@ -563,7 +563,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-core"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "semver",
  "serde",
@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-diagnosis"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -586,7 +586,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-graph"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "petgraph",
  "serde",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-predictor"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -610,8 +610,9 @@ dependencies = [
 
 [[package]]
 name = "unfuck-project"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
+ "semver",
  "serde",
  "serde_json",
  "tempfile",
@@ -622,7 +623,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-scanner"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "sysinfo",
@@ -631,7 +632,7 @@ dependencies = [
 
 [[package]]
 name = "unfuck-verifier"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",

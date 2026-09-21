@@ -1,0 +1,7 @@
+{
+  "name": "conflict-node-version",
+  "version": "1.0.0",
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

@@ -206,3 +206,54 @@ fn test_json_serialization_roundtrip() {
     assert!(parsed.get("diagnoses").is_some());
     assert!(parsed.get("verification").is_some());
 }
+
+#[test]
+fn test_fixture_conflict_node_version() {
+    let fixture_path = fixtures_dir().join("conflict-node-version");
+    let manifest = analyze_project(&fixture_path).expect("analyze conflict-node-version");
+    let machine = scan_machine();
+
+    let evaluated_constraints = evaluate_all(&manifest.requirements, &machine);
+    let env_model = EnvironmentModel::new(manifest, machine);
+    let predictions = predict_failures(&env_model, &evaluated_constraints);
+
+    let conflict_pred = predictions
+        .iter()
+        .find(|p| p.category == PredictionCategory::ConfigurationConflict);
+    assert!(
+        conflict_pred.is_some(),
+        "Expected ConfigurationConflict prediction for node version mismatch between .nvmrc and package.json"
+    );
+    let pred = conflict_pred.unwrap();
+    assert_eq!(pred.confidence, Confidence::Confirmed);
+    assert!(pred
+        .summary
+        .contains("Contradictory node version requirements"));
+}
+
+#[test]
+fn test_fixture_missing_env_app() {
+    let fixture_path = fixtures_dir().join("missing-env-app");
+    let manifest = analyze_project(&fixture_path).expect("analyze missing-env-app");
+    let machine = scan_machine();
+
+    let evaluated_constraints = evaluate_all(&manifest.requirements, &machine);
+    let env_model = EnvironmentModel::new(manifest, machine);
+    let predictions = predict_failures(&env_model, &evaluated_constraints);
+
+    // API_SECRET_KEY is required and missing
+    let secret_pred = predictions
+        .iter()
+        .find(|p| p.title.contains("API_SECRET_KEY"));
+    assert!(
+        secret_pred.is_some(),
+        "Expected missing env prediction for API_SECRET_KEY"
+    );
+
+    // PORT has default 3000, so it should NOT be flagged as missing
+    let port_pred = predictions.iter().find(|p| p.title.contains("PORT"));
+    assert!(
+        port_pred.is_none(),
+        "PORT has a default in .env.example and should not be predicted as missing"
+    );
+}
