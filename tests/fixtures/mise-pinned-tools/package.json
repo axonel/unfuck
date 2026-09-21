@@ -1,0 +1,9 @@
+{
+  "name": "mise-pinned-tools-app",
+  "version": "1.0.0",
+  "packageManager": "pnpm@11.24.0",
+  "engines": {
+    "node": ">=20.0.0",
+    "pnpm": ">=10.0.0"
+  }
+}
