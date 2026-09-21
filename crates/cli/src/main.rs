@@ -5,7 +5,6 @@ use unfuck::format;
 use unfuck::{execute_pipeline, UnfuckReport};
 use unfuck_diagnosis::Diagnosis;
 use unfuck_project::analyze_project;
-use unfuck_scanner::scan_machine;
 
 #[derive(Parser)]
 #[command(
@@ -80,7 +79,7 @@ fn main() -> ExitCode {
     match &cli.command {
         Some(Commands::Scan { path }) => match analyze_project(path) {
             Ok(proj) => {
-                let mach = scan_machine();
+                let mach = unfuck_scanner::scan_machine_for_project(Some(path));
                 if cli.json {
                     let scan_json = serde_json::json!({
                         "project": proj,
@@ -102,6 +101,30 @@ fn main() -> ExitCode {
                             r.version,
                             r.executable_path.display()
                         );
+                    }
+                    if !mach.package_managers.is_empty() {
+                        println!("Discovered package managers: {}", mach.package_managers.len());
+                        for pm in &mach.package_managers {
+                            let ver_str = pm.version.as_deref().unwrap_or("unknown");
+                            println!(
+                                "  - {} {} ({})",
+                                pm.name,
+                                ver_str,
+                                pm.executable_path.display()
+                            );
+                        }
+                    }
+                    if !mach.tools.is_empty() {
+                        println!("Discovered tools: {}", mach.tools.len());
+                        for t in &mach.tools {
+                            let ver_str = t.version.as_deref().unwrap_or("present");
+                            println!(
+                                "  - {} {} ({})",
+                                t.name,
+                                ver_str,
+                                t.executable_path.display()
+                            );
+                        }
                     }
                 }
                 ExitCode::from(EXIT_OK)

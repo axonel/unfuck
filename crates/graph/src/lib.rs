@@ -23,18 +23,18 @@ mod tests {
             root_path: PathBuf::from("/test/web-app"),
             languages: vec!["python".to_string()],
             package_managers: vec!["uv".to_string()],
-            requirements: vec![ProjectRequirement {
-                name: "python".to_string(),
-                kind: RequirementKind::Runtime {
+            requirements: vec![ProjectRequirement::new(
+                "python".to_string(),
+                RequirementKind::Runtime {
                     name: "python".to_string(),
-                    constraint: ">= 3.11".to_string(),
+                    constraint: unfuck_core::version::VersionConstraint::GreaterEqual("3.11".to_string()),
                 },
-                evidence: Evidence::from_repo_file(
+                Evidence::from_repo_file(
                     PathBuf::from("pyproject.toml"),
                     Some(10),
                     "requires-python >= 3.11",
                 ),
-            }],
+            )],
             declared_ports: vec![],
             env_vars: vec![],
             env_var_specs: vec![],
@@ -60,6 +60,8 @@ mod tests {
                     "python3 --version",
                 ),
             }],
+            package_managers: vec![],
+            tools: vec![],
             services: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
@@ -72,7 +74,7 @@ mod tests {
         let eval = EvaluatedConstraint {
             constraint: Constraint::RuntimeVersion {
                 runtime: "python".to_string(),
-                constraint_str: ">= 3.11".to_string(),
+                constraint: unfuck_core::VersionConstraint::GreaterEqual("3.11".to_string()),
             },
             status: ConstraintStatus::Violated {
                 reason: "Runtime 'python' version 3.10.12 does not satisfy requirement >= 3.11"

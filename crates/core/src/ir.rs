@@ -47,6 +47,19 @@ pub enum ToolScope {
     Unknown,
 }
 
+impl std::fmt::Display for ToolScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::RequiredForProject => write!(f, "required for project"),
+            Self::RequiredForBuild => write!(f, "required for build"),
+            Self::RequiredForTask => write!(f, "required for task"),
+            Self::Optional => write!(f, "optional"),
+            Self::DeclaredButUnused => write!(f, "declared but unused"),
+            Self::Unknown => write!(f, "unknown"),
+        }
+    }
+}
+
 /// Requirement kind declared by or inferred from a project.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]

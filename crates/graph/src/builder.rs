@@ -122,6 +122,12 @@ impl EnvironmentGraph {
                         Constraint::RuntimeVersion { runtime, .. } => {
                             c.languages.iter().any(|l| l.contains(runtime))
                         }
+                        Constraint::PackageManagerVersion { name, .. } => {
+                            c.package_managers.iter().any(|pm| pm.contains(name))
+                        }
+                        Constraint::ToolAvailable { name, .. } => {
+                            c.requirements.iter().any(|r| r.name == *name)
+                        }
                         Constraint::PortAvailable { port } => c.declared_ports.contains(port),
                         Constraint::EnvVarSet { key, .. } => c.env_vars.contains(key),
                         _ => false,
@@ -369,24 +375,77 @@ impl EnvironmentGraph {
         let (root_cause, causal_steps) = match &constraint {
             Constraint::RuntimeVersion {
                 runtime,
-                constraint_str,
+                constraint,
             } => {
                 let actual = machine_state
                     .as_deref()
                     .unwrap_or("missing or unresolvable");
                 (
-                    format!("{}.version >= {}", runtime, constraint_str),
+                    format!("{}.version {}", runtime, constraint),
                     vec![
                         format!(
                             "Component '{}' requires {} {}",
-                            target_comp, runtime, constraint_str
+                            target_comp, runtime, constraint
                         ),
                         format!("Host machine runtime: {}", actual),
                         format!(
                             "First violated invariant: {} version satisfies {}",
-                            runtime, constraint_str
+                            runtime, constraint
                         ),
                         format!("Impact: {} build or startup cannot proceed", target_comp),
+                    ],
+                )
+            }
+            Constraint::PackageManagerVersion {
+                name,
+                constraint,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("missing or unresolvable");
+                let c_str = constraint
+                    .as_ref()
+                    .map(|c| c.to_string())
+                    .unwrap_or_else(|| "*".to_string());
+                (
+                    format!("{}.version {}", name, c_str),
+                    vec![
+                        format!(
+                            "Component '{}' requires package manager {} {}",
+                            target_comp, name, c_str
+                        ),
+                        format!("Host package manager: {}", actual),
+                        format!(
+                            "First violated invariant: {} satisfies {}",
+                            name, c_str
+                        ),
+                        format!("Impact: dependency resolution or task execution cannot proceed"),
+                    ],
+                )
+            }
+            Constraint::ToolAvailable {
+                name,
+                kind,
+                scope,
+                constraint,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("missing or unresolvable");
+                let c_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" {}", c))
+                    .unwrap_or_default();
+                (
+                    format!("{}.available{}", name, c_str),
+                    vec![
+                        format!(
+                            "Component '{}' declares tool '{}' ({}, scope: {}){}",
+                            target_comp, name, kind, scope, c_str
+                        ),
+                        format!("Host machine state: {}", actual),
+                        format!("First violated invariant: tool '{}' is available", name),
+                        format!("Impact: tasks requiring '{}' cannot run", name),
                     ],
                 )
             }

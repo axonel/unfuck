@@ -51,6 +51,13 @@ pub fn verify_environment(
             Constraint::RuntimeVersion { runtime, .. } => {
                 (format!("runtime:{}", runtime), "runtime".to_string())
             }
+            Constraint::PackageManagerVersion { name, .. } => (
+                format!("package_manager:{}", name),
+                "package_manager".to_string(),
+            ),
+            Constraint::ToolAvailable { name, kind, .. } => {
+                (format!("tool:{}", name), kind.to_string())
+            }
             Constraint::PortAvailable { port } => (format!("port:{}", port), "network".to_string()),
             Constraint::ServiceRunning { service, .. } => {
                 (format!("service:{}", service), "service".to_string())
@@ -137,6 +144,8 @@ mod tests {
             total_memory_bytes: 1024,
             available_memory_bytes: 512,
             runtimes: vec![],
+            package_managers: vec![],
+            tools: vec![],
             services: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
@@ -156,7 +165,7 @@ mod tests {
         let eval_fail = EvaluatedConstraint {
             constraint: Constraint::RuntimeVersion {
                 runtime: "node".to_string(),
-                constraint_str: ">= 20".to_string(),
+                constraint: unfuck_core::version::VersionConstraint::parse(">= 20"),
             },
             status: ConstraintStatus::Violated {
                 reason: "Node not installed".to_string(),

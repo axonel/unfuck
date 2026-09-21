@@ -29,6 +29,22 @@ pub fn print_human_summary(
     if !project.package_managers.is_empty() {
         println!("Package Mgr: {}", project.package_managers.join(", "));
     }
+    let tools: Vec<&str> = project
+        .requirements
+        .iter()
+        .filter_map(|r| match &r.kind {
+            unfuck_core::ir::RequirementKind::DeveloperTool { name, .. }
+            | unfuck_core::ir::RequirementKind::BuildTool { name, .. }
+            | unfuck_core::ir::RequirementKind::CodeGenerator { name, .. } => Some(name.as_str()),
+            _ => None,
+        })
+        .collect();
+    if !tools.is_empty() {
+        let mut uniq_tools = tools;
+        uniq_tools.sort();
+        uniq_tools.dedup();
+        println!("Tools:       {}", uniq_tools.join(", "));
+    }
     if !project.components.is_empty() {
         let comp_strs: Vec<String> = project
             .components

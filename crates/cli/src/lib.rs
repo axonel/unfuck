@@ -9,7 +9,6 @@ use unfuck_diagnosis::{diagnose_all, Diagnosis};
 use unfuck_graph::EnvironmentGraph;
 use unfuck_predictor::{predict_failures, Prediction};
 use unfuck_project::analyze_project;
-use unfuck_scanner::scan_machine;
 use unfuck_verifier::{verify_environment, VerificationReport};
 
 #[derive(Serialize)]
@@ -33,7 +32,7 @@ pub struct PipelineOutput {
 
 pub fn execute_pipeline(target_path: &Path) -> Result<PipelineOutput, unfuck_core::UnfuckError> {
     let project = analyze_project(target_path)?;
-    let machine = scan_machine();
+    let machine = unfuck_scanner::scan_machine_for_project(Some(target_path));
     let evaluated_constraints = evaluate_all(&project.requirements, &machine);
     let env_model = EnvironmentModel::new(project, machine);
     let graph = EnvironmentGraph::build(&env_model, &evaluated_constraints);

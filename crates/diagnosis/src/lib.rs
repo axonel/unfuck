@@ -28,7 +28,7 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
         let (root_cause, causal_chain) = match &pred.constraint {
             Constraint::RuntimeVersion {
                 runtime,
-                constraint_str,
+                constraint,
             } => {
                 let actual_state = matching_trace
                     .and_then(|t| t.machine_state.as_deref())
@@ -36,12 +36,58 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
 
                 let chain = vec![
                     format!("Host machine state: {}", actual_state),
-                    format!("Project specification: requires {} {}", runtime, constraint_str),
-                    format!("Violated invariant: {}.version satisfies {}", runtime, constraint_str),
+                    format!("Project specification: requires {} {}", runtime, constraint),
+                    format!("Violated invariant: {}.version satisfies {}", runtime, constraint),
                     format!("Downstream impact: {} toolchain cannot initialize; build and runtime will fail", runtime),
                 ];
 
-                (format!("{}.version >= {}", runtime, constraint_str), chain)
+                (format!("{}.version satisfies {}", runtime, constraint), chain)
+            }
+
+            Constraint::PackageManagerVersion {
+                name,
+                constraint,
+            } => {
+                let actual_state = matching_trace
+                    .and_then(|t| t.machine_state.as_deref())
+                    .unwrap_or("package manager missing or version incompatible");
+                let constraint_desc = match constraint {
+                    Some(c) => format!(" satisfying {}", c),
+                    None => " installed".to_string(),
+                };
+
+                let chain = vec![
+                    format!("Host machine state: {}", actual_state),
+                    format!("Project specification: requires package manager {}{}", name, constraint_desc),
+                    format!("Violated invariant: package_manager.{}{}", name, constraint_desc),
+                    format!("Downstream impact: dependency installation via {} cannot proceed", name),
+                ];
+
+                (format!("package_manager.{}{}", name, constraint_desc), chain)
+            }
+
+            Constraint::ToolAvailable {
+                name,
+                kind,
+                constraint,
+                scope,
+            } => {
+                let actual_state = matching_trace
+                    .and_then(|t| t.machine_state.as_deref())
+                    .unwrap_or("tool missing or version incompatible");
+                let constraint_desc = match constraint {
+                    Some(c) => format!(" satisfying {}", c),
+                    None => " installed".to_string(),
+                };
+
+                let chain = vec![
+                    format!("Host machine state: {}", actual_state),
+                    format!("Project specification: declares {} tool {}{} (scope: {:?})", kind, name, constraint_desc, scope),
+                    format!("Violated invariant: tool.{}{}", name, constraint_desc),
+                    format!("Downstream impact: tasks or builds relying on {} will fail", name),
+                ];
+
+                (format!("tool.{}{}", name, constraint_desc), chain)
             }
 
             Constraint::PortAvailable { port } => {
@@ -196,7 +242,7 @@ mod tests {
             confidence: Confidence::High,
             constraint: Constraint::RuntimeVersion {
                 runtime: "python".to_string(),
-                constraint_str: ">= 3.11".to_string(),
+                constraint: unfuck_core::version::VersionConstraint::parse(">= 3.11"),
             },
             affected_components: vec!["python".to_string(), "backend".to_string()],
             project_evidence: None,
