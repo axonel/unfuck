@@ -3,11 +3,13 @@ use std::path::{Path, PathBuf};
 use toml::Value;
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::{ProjectRequirement, RequirementKind};
+use unfuck_core::Confidence;
 
 pub struct PythonDiscovery {
     pub is_python: bool,
     pub package_managers: Vec<String>,
     pub requirements: Vec<ProjectRequirement>,
+    pub ports: Vec<u16>,
     pub evidence: Vec<Evidence>,
 }
 
@@ -15,6 +17,7 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
     let mut is_python = false;
     let mut package_managers = Vec::new();
     let mut requirements = Vec::new();
+    let mut ports = Vec::new();
     let mut evidence = Vec::new();
 
     // 1. Lockfiles
@@ -78,12 +81,15 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
         match fs::read_to_string(&pyproject_path) {
             Ok(content) => match content.parse::<Value>() {
                 Ok(toml) => {
+                    let mut has_py_req = false;
+
                     // Check [project] requires-python
                     if let Some(req_py) = toml
                         .get("project")
                         .and_then(|p| p.get("requires-python"))
                         .and_then(|v| v.as_str())
                     {
+                        has_py_req = true;
                         let ev = Evidence::from_repo_file(
                             PathBuf::from("pyproject.toml"),
                             None,
@@ -111,6 +117,7 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                         .and_then(|d| d.get("python"))
                         .and_then(|v| v.as_str())
                     {
+                        has_py_req = true;
                         let ev = Evidence::from_repo_file(
                             PathBuf::from("pyproject.toml"),
                             None,
@@ -130,7 +137,29 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                         evidence.push(ev);
                     }
 
-                    // Check dependencies for PostgreSQL drivers (psycopg, psycopg2, asyncpg)
+                    // Baseline Python requirement if no specific version constraint declared
+                    if !has_py_req && requirements.iter().all(|r| r.name != "python") {
+                        let ev = Evidence::new(
+                            unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                                path: PathBuf::from("pyproject.toml"),
+                                line: None,
+                                detail: Some("pyproject.toml present".to_string()),
+                            },
+                            Confidence::High,
+                            "Python runtime required by pyproject.toml",
+                        );
+                        requirements.push(ProjectRequirement {
+                            name: "python".to_string(),
+                            kind: RequirementKind::Runtime {
+                                name: "python".to_string(),
+                                constraint: "*".to_string(),
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
+
+                    // Check dependencies
                     let check_dep = |name: &str| -> bool {
                         let in_project = toml
                             .get("project")
@@ -153,6 +182,7 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                         in_project || in_poetry
                     };
 
+                    // PostgreSQL drivers
                     if check_dep("psycopg") || check_dep("psycopg2") || check_dep("asyncpg") {
                         let ev = Evidence::from_repo_file(
                             PathBuf::from("pyproject.toml"),
@@ -169,6 +199,61 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                         });
                         evidence.push(ev);
                     }
+
+                    // Web Framework default ports
+                    if check_dep("fastapi") || check_dep("uvicorn") {
+                        if !ports.contains(&8000) {
+                            ports.push(8000);
+                            let ev = Evidence::from_repo_file(
+                                PathBuf::from("pyproject.toml"),
+                                None,
+                                "Default port 8000 inferred from FastAPI/Uvicorn dependency",
+                            );
+                            requirements.push(ProjectRequirement {
+                                name: "port:8000".to_string(),
+                                kind: RequirementKind::Port {
+                                    port: 8000,
+                                    service_hint: Some("fastapi".to_string()),
+                                },
+                                evidence: ev.clone(),
+                            });
+                            evidence.push(ev);
+                        }
+                    } else if check_dep("django") {
+                        if !ports.contains(&8000) {
+                            ports.push(8000);
+                            let ev = Evidence::from_repo_file(
+                                PathBuf::from("pyproject.toml"),
+                                None,
+                                "Default port 8000 inferred from Django dependency",
+                            );
+                            requirements.push(ProjectRequirement {
+                                name: "port:8000".to_string(),
+                                kind: RequirementKind::Port {
+                                    port: 8000,
+                                    service_hint: Some("django".to_string()),
+                                },
+                                evidence: ev.clone(),
+                            });
+                            evidence.push(ev);
+                        } else if check_dep("flask") && !ports.contains(&5000) {
+                            ports.push(5000);
+                            let ev = Evidence::from_repo_file(
+                                PathBuf::from("pyproject.toml"),
+                                None,
+                                "Default port 5000 inferred from Flask dependency",
+                            );
+                            requirements.push(ProjectRequirement {
+                                name: "port:5000".to_string(),
+                                kind: RequirementKind::Port {
+                                    port: 5000,
+                                    service_hint: Some("flask".to_string()),
+                                },
+                                evidence: ev.clone(),
+                            });
+                            evidence.push(ev);
+                        }
+                    }
                 }
                 Err(e) => {
                     evidence.push(Evidence::new(
@@ -177,7 +262,7 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                             line: None,
                             detail: Some(e.to_string()),
                         },
-                        unfuck_core::Confidence::Confirmed,
+                        Confidence::Confirmed,
                         format!("Syntax error in pyproject.toml: {}", e),
                     ));
                 }
@@ -189,7 +274,7 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
                         line: None,
                         detail: Some(e.to_string()),
                     },
-                    unfuck_core::Confidence::Confirmed,
+                    Confidence::Confirmed,
                     format!("Failed to read pyproject.toml: {}", e),
                 ));
             }
@@ -200,35 +285,77 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
     let req_txt_path = root.join("requirements.txt");
     if req_txt_path.exists() {
         is_python = true;
+        if !package_managers.contains(&"pip".to_string()) {
+            package_managers.push("pip".to_string());
+        }
+
         if let Ok(content) = fs::read_to_string(&req_txt_path) {
             let mut found_pg = false;
+            let mut found_fastapi = false;
+            let mut found_flask = false;
+            let mut found_django = false;
+
             for (idx, line) in content.lines().enumerate() {
                 let trimmed = line.trim();
                 if trimmed.starts_with("psycopg") || trimmed.starts_with("asyncpg") {
-                    found_pg = true;
-                    let ev = Evidence::from_repo_file(
-                        PathBuf::from("requirements.txt"),
-                        Some(idx + 1),
-                        format!("PostgreSQL library detected: {}", trimmed),
-                    );
-                    requirements.push(ProjectRequirement {
-                        name: "postgresql".to_string(),
-                        kind: RequirementKind::Service {
+                    if !found_pg {
+                        found_pg = true;
+                        let ev = Evidence::from_repo_file(
+                            PathBuf::from("requirements.txt"),
+                            Some(idx + 1),
+                            format!(
+                                "PostgreSQL driver detected in requirements.txt: {}",
+                                trimmed
+                            ),
+                        );
+                        requirements.push(ProjectRequirement {
                             name: "postgresql".to_string(),
-                            min_version: None,
-                        },
-                        evidence: ev.clone(),
-                    });
-                    evidence.push(ev);
-                    break;
+                            kind: RequirementKind::Service {
+                                name: "postgresql".to_string(),
+                                min_version: None,
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
+                } else if trimmed.starts_with("fastapi") || trimmed.starts_with("uvicorn") {
+                    found_fastapi = true;
+                } else if trimmed.starts_with("flask") {
+                    found_flask = true;
+                } else if trimmed.starts_with("django") {
+                    found_django = true;
                 }
             }
-            if !found_pg {
-                evidence.push(Evidence::from_repo_file(
-                    PathBuf::from("requirements.txt"),
-                    None,
-                    "Python requirements.txt file detected",
-                ));
+
+            if found_fastapi && !ports.contains(&8000) {
+                ports.push(8000);
+            }
+            if found_django && !ports.contains(&8000) {
+                ports.push(8000);
+            }
+            if found_flask && !ports.contains(&5000) {
+                ports.push(5000);
+            }
+
+            if requirements.iter().all(|r| r.name != "python") {
+                let ev = Evidence::new(
+                    unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                        path: PathBuf::from("requirements.txt"),
+                        line: None,
+                        detail: Some("requirements.txt present".to_string()),
+                    },
+                    Confidence::High,
+                    "Python runtime required by requirements.txt",
+                );
+                requirements.push(ProjectRequirement {
+                    name: "python".to_string(),
+                    kind: RequirementKind::Runtime {
+                        name: "python".to_string(),
+                        constraint: "*".to_string(),
+                    },
+                    evidence: ev.clone(),
+                });
+                evidence.push(ev);
             }
         }
     }
@@ -237,6 +364,7 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
         is_python,
         package_managers,
         requirements,
+        ports,
         evidence,
     }
 }
