@@ -41,6 +41,12 @@ pub fn requirement_to_constraint(req: &ProjectRequirement) -> Option<Constraint>
             key: name.clone(),
             required: *required,
         }),
+        RequirementKind::Conflict {
+            target, details, ..
+        } => Some(Constraint::ConflictDetected {
+            target: target.clone(),
+            details: details.clone(),
+        }),
     }
 }
 
@@ -302,6 +308,23 @@ pub fn evaluate_constraint(
                 }
             }
         }
+
+        Constraint::ConflictDetected { target, details } => {
+            let reason = format!(
+                "Contradictory configuration detected for '{}': {}",
+                target, details
+            );
+            let root_cause_hint = format!("{}.configuration_conflict", target);
+            EvaluatedConstraint {
+                constraint: constraint.clone(),
+                status: ConstraintStatus::Violated {
+                    reason,
+                    root_cause_hint,
+                },
+                project_evidence,
+                machine_evidence: None,
+            }
+        }
     }
 }
 
@@ -313,6 +336,12 @@ pub fn evaluate_all(
     let mut results = Vec::new();
     for req in requirements {
         if let Some(constraint) = requirement_to_constraint(req) {
+            if results
+                .iter()
+                .any(|e: &EvaluatedConstraint| e.constraint == constraint)
+            {
+                continue;
+            }
             let evaluated = evaluate_constraint(&constraint, machine, Some(req.evidence.clone()));
             results.push(evaluated);
         }

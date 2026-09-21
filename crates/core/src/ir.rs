@@ -36,6 +36,12 @@ pub enum RequirementKind {
     Arch { name: String },
     /// Minimum physical or available memory.
     Memory { min_bytes: u64 },
+    /// Conflict between multiple configuration sources (e.g. .nvmrc says 20, package.json says >=22).
+    Conflict {
+        target: String,
+        details: String,
+        competing_sources: Vec<String>,
+    },
 }
 
 /// A specific requirement declared by a project, with evidence.
@@ -132,6 +138,39 @@ impl MachineCapability {
     }
 }
 
+/// Category of an environment variable in project context.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EnvVarCategory {
+    /// Explicitly required for application operation (e.g. no default, or marked required).
+    Required,
+    /// Has a default or fallback value provided in template or configuration.
+    OptionalWithDefault,
+    /// Present in a local configuration file (.env, .env.local).
+    ConfiguredLocal,
+}
+
+/// A structured environment variable specification.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct EnvVarSpec {
+    pub name: String,
+    pub category: EnvVarCategory,
+    pub default_value: Option<String>,
+    pub declared_source: Option<PathBuf>,
+}
+
+/// A sub-component of a project (e.g. "web", "backend", "api", "cli", "worker").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProjectComponent {
+    pub name: String,
+    pub path: PathBuf,
+    pub languages: Vec<String>,
+    pub package_managers: Vec<String>,
+    pub requirements: Vec<ProjectRequirement>,
+    pub declared_ports: Vec<u16>,
+    pub env_vars: Vec<String>,
+}
+
 /// Structured manifest of project requirements extracted by the project analyzer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectManifest {
@@ -142,8 +181,30 @@ pub struct ProjectManifest {
     pub requirements: Vec<ProjectRequirement>,
     pub declared_ports: Vec<u16>,
     pub env_vars: Vec<String>,
+    #[serde(default)]
+    pub env_var_specs: Vec<EnvVarSpec>,
+    #[serde(default)]
+    pub components: Vec<ProjectComponent>,
     pub docker_used: bool,
     pub evidence: Vec<Evidence>,
+}
+
+impl ProjectManifest {
+    pub fn empty(name: impl Into<String>, root_path: PathBuf) -> Self {
+        Self {
+            name: name.into(),
+            root_path,
+            languages: Vec::new(),
+            package_managers: Vec::new(),
+            requirements: Vec::new(),
+            declared_ports: Vec::new(),
+            env_vars: Vec::new(),
+            env_var_specs: Vec::new(),
+            components: Vec::new(),
+            docker_used: false,
+            evidence: Vec::new(),
+        }
+    }
 }
 
 /// Canonical intermediate representation combining project and machine intelligence.

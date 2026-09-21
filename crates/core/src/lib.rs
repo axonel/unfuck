@@ -57,6 +57,8 @@ mod tests {
             }],
             declared_ports: vec![8000],
             env_vars: vec!["DATABASE_URL".to_string()],
+            env_var_specs: vec![],
+            components: vec![],
             docker_used: false,
             evidence: vec![],
         };

@@ -26,6 +26,8 @@ pub enum Constraint {
     MemoryMin { min_bytes: u64 },
     /// An environment variable must be set in the environment.
     EnvVarSet { key: String, required: bool },
+    /// Contradictory configuration detected across project specification files.
+    ConflictDetected { target: String, details: String },
 }
 
 impl fmt::Display for Constraint {
@@ -65,6 +67,9 @@ impl fmt::Display for Constraint {
                 } else {
                     write!(f, "Environment variable '{}' is optional but declared", key)
                 }
+            }
+            Self::ConflictDetected { target, details } => {
+                write!(f, "Configuration conflict for '{}': {}", target, details)
             }
         }
     }

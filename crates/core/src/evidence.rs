@@ -32,6 +32,17 @@ pub enum EvidenceSource {
     EnvironmentVariable { key: String, value: Option<String> },
     /// Direct runtime or filesystem observation.
     DirectObservation { detail: String },
+    /// Active dynamic probe (e.g. TCP connect, daemon ping).
+    DynamicProbe {
+        target: String,
+        probe_type: String,
+        outcome: String,
+    },
+    /// Discrepancy or conflict across multiple project sources.
+    MultiSourceConflict {
+        summary: String,
+        files: Vec<PathBuf>,
+    },
 }
 
 /// Traceable evidence supporting an observation, constraint, or diagnosis.
