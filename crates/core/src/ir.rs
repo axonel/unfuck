@@ -211,6 +211,62 @@ pub struct PortInfo {
     pub evidence: Evidence,
 }
 
+/// Status of a container observed on the host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContainerStatus {
+    Running { healthy: Option<bool> },
+    Exited { exit_code: i32 },
+    Created,
+    Paused,
+    Dead,
+    Unknown(String),
+}
+
+impl std::fmt::Display for ContainerStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Running {
+                healthy: Some(true),
+            } => write!(f, "running (healthy)"),
+            Self::Running {
+                healthy: Some(false),
+            } => write!(f, "running (unhealthy)"),
+            Self::Running { healthy: None } => write!(f, "running"),
+            Self::Exited { exit_code } => write!(f, "exited ({})", exit_code),
+            Self::Created => write!(f, "created"),
+            Self::Paused => write!(f, "paused"),
+            Self::Dead => write!(f, "dead"),
+            Self::Unknown(s) => write!(f, "unknown ({})", s),
+        }
+    }
+}
+
+/// Port mapping for a container.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerPortMapping {
+    pub host_ip: Option<String>,
+    pub host_port: u16,
+    pub container_port: u16,
+    pub protocol: String,
+}
+
+/// An observed container instance on the host machine.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContainerObservation {
+    pub id: String,
+    pub names: Vec<String>,
+    pub image: String,
+    pub status: ContainerStatus,
+    #[serde(default)]
+    pub ports: Vec<ContainerPortMapping>,
+    pub compose_project: Option<String>,
+    pub compose_service: Option<String>,
+    #[serde(default)]
+    pub labels: HashMap<String, String>,
+    pub evidence: Evidence,
+}
+
 /// Complete machine capability discovery.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineCapability {
@@ -224,10 +280,18 @@ pub struct MachineCapability {
     pub package_managers: Vec<PackageManagerObservation>,
     pub tools: Vec<ToolObservation>,
     pub services: Vec<Service>,
+    #[serde(default)]
+    pub containers: Vec<ContainerObservation>,
     pub listening_ports: Vec<PortInfo>,
     pub env_vars: HashMap<String, String>,
     pub path_entries: Vec<PathBuf>,
     pub evidence: Vec<Evidence>,
+}
+
+impl Default for MachineCapability {
+    fn default() -> Self {
+        Self::empty()
+    }
 }
 
 impl MachineCapability {
@@ -243,11 +307,41 @@ impl MachineCapability {
             package_managers: Vec::new(),
             tools: Vec::new(),
             services: Vec::new(),
+            containers: Vec::new(),
             listening_ports: Vec::new(),
             env_vars: HashMap::new(),
             path_entries: Vec::new(),
             evidence: Vec::new(),
         }
+    }
+
+    pub fn find_container_for_compose_service(
+        &self,
+        project_name: Option<&str>,
+        service_name: &str,
+        container_name: Option<&str>,
+    ) -> Option<&ContainerObservation> {
+        for c in &self.containers {
+            if let Some(target_name) = container_name {
+                let clean_target = target_name.trim_start_matches('/');
+                if c.names
+                    .iter()
+                    .any(|n| n.trim_start_matches('/') == clean_target)
+                {
+                    return Some(c);
+                }
+            }
+            if let (Some(proj), Some(c_proj), Some(c_srv)) = (
+                project_name,
+                c.compose_project.as_deref(),
+                c.compose_service.as_deref(),
+            ) {
+                if c_proj.eq_ignore_ascii_case(proj) && c_srv.eq_ignore_ascii_case(service_name) {
+                    return Some(c);
+                }
+            }
+        }
+        None
     }
 
     pub fn find_runtime(&self, name: &str) -> Option<&Runtime> {
@@ -314,6 +408,41 @@ pub struct ProjectComponent {
     pub env_vars: Vec<String>,
 }
 
+/// Specification of a service defined within a Docker Compose project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComposeServiceSpec {
+    pub name: String,
+    pub container_name: Option<String>,
+    pub image: Option<String>,
+    pub service_type: Option<String>,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    pub env_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub ports: Vec<u16>,
+    pub has_healthcheck: bool,
+    #[serde(default)]
+    pub environment_vars: Vec<String>,
+    #[serde(default)]
+    pub unresolved_interpolations: Vec<String>,
+}
+
+/// Specification of a Docker Compose project discovered in the repository.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ComposeProjectSpec {
+    pub file_path: PathBuf,
+    pub name: Option<String>,
+    pub services: Vec<ComposeServiceSpec>,
+    #[serde(default)]
+    pub env_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub missing_env_files: Vec<PathBuf>,
+    #[serde(default)]
+    pub unresolved_env_vars: Vec<String>,
+    pub can_instantiate: bool,
+}
+
 /// Structured manifest of project requirements extracted by the project analyzer.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProjectManifest {
@@ -328,6 +457,8 @@ pub struct ProjectManifest {
     pub env_var_specs: Vec<EnvVarSpec>,
     #[serde(default)]
     pub components: Vec<ProjectComponent>,
+    #[serde(default)]
+    pub compose_projects: Vec<ComposeProjectSpec>,
     pub docker_used: bool,
     pub evidence: Vec<Evidence>,
 }
@@ -344,9 +475,35 @@ impl ProjectManifest {
             env_vars: Vec::new(),
             env_var_specs: Vec::new(),
             components: Vec::new(),
+            compose_projects: Vec::new(),
             docker_used: false,
             evidence: Vec::new(),
         }
+    }
+
+    pub fn find_compose_service_for_service(
+        &self,
+        service_name: &str,
+    ) -> Option<(&ComposeProjectSpec, &ComposeServiceSpec)> {
+        for project in &self.compose_projects {
+            for svc in &project.services {
+                let matches_type = svc
+                    .service_type
+                    .as_deref()
+                    .map(|t| t.eq_ignore_ascii_case(service_name))
+                    .unwrap_or(false);
+                let matches_name = svc.name.eq_ignore_ascii_case(service_name);
+                let matches_image = svc
+                    .image
+                    .as_deref()
+                    .map(|img| img.to_lowercase().contains(&service_name.to_lowercase()))
+                    .unwrap_or(false);
+                if matches_type || matches_name || matches_image {
+                    return Some((project, svc));
+                }
+            }
+        }
+        None
     }
 }
 

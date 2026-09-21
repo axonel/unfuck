@@ -73,6 +73,14 @@ pub fn verify_environment(
             Constraint::ConflictDetected { target, .. } => {
                 (format!("conflict:{}", target), "configuration".to_string())
             }
+            Constraint::ComposeConfigUnresolved { service_name, .. } => {
+                let s_name = service_name.as_deref().unwrap_or("compose");
+                (format!("compose_config:{}", s_name), "compose".to_string())
+            }
+            Constraint::ComposeServiceState { service_name, .. } => (
+                format!("compose_service:{}", service_name),
+                "compose".to_string(),
+            ),
         };
 
         let passed = eval.is_satisfied();
@@ -132,6 +140,7 @@ mod tests {
             env_vars: vec![],
             env_var_specs: vec![],
             components: vec![],
+            compose_projects: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -147,6 +156,7 @@ mod tests {
             package_managers: vec![],
             tools: vec![],
             services: vec![],
+            containers: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
             path_entries: vec![],

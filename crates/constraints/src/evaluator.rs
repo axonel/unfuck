@@ -477,7 +477,183 @@ pub fn evaluate_constraint(
                 machine_evidence: None,
             }
         }
+
+        Constraint::ComposeConfigUnresolved {
+            compose_file,
+            project_name: _,
+            service_name,
+            missing_env_files,
+            unresolved_vars,
+        } => {
+            let mut reasons = Vec::new();
+            if !missing_env_files.is_empty() {
+                let files: Vec<String> = missing_env_files
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect();
+                reasons.push(format!(
+                    "required env file(s) missing: {}",
+                    files.join(", ")
+                ));
+            }
+            if !unresolved_vars.is_empty() {
+                reasons.push(format!(
+                    "unresolved required variable(s): {}",
+                    unresolved_vars.join(", ")
+                ));
+            }
+            let svc_str = service_name
+                .as_deref()
+                .map(|s| format!(" for service '{}'", s))
+                .unwrap_or_default();
+            let reason = format!(
+                "Docker Compose configuration in '{}'{} is unresolved: {}",
+                compose_file.display(),
+                svc_str,
+                reasons.join("; ")
+            );
+            let root_cause_hint = service_name
+                .as_deref()
+                .map(|s| format!("compose.{}.config_unresolved", s))
+                .unwrap_or_else(|| "compose.config_unresolved".to_string());
+            EvaluatedConstraint {
+                constraint: constraint.clone(),
+                status: ConstraintStatus::Violated {
+                    reason,
+                    root_cause_hint,
+                },
+                project_evidence,
+                machine_evidence: None,
+            }
+        }
+
+        Constraint::ComposeServiceState {
+            compose_file,
+            service_name,
+            container_name,
+            expected_state,
+            actual_state,
+        } => {
+            let satisfied = match (expected_state.as_str(), actual_state.as_str()) {
+                ("running", "running") | ("running", "running (healthy)") => true,
+                ("healthy", "running (healthy)") => true,
+                _ => actual_state == expected_state,
+            };
+            if satisfied {
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            } else {
+                let c_str = container_name
+                    .as_deref()
+                    .map(|c| format!(" (container '{}')", c))
+                    .unwrap_or_default();
+                let reason = format!(
+                    "Compose service '{}'{} defined in '{}' is in state '{}', expected '{}'",
+                    service_name,
+                    c_str,
+                    compose_file.display(),
+                    actual_state,
+                    expected_state
+                );
+                let root_cause_hint = format!("compose.{}.state_mismatch", service_name);
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Violated {
+                        reason,
+                        root_cause_hint,
+                    },
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            }
+        }
     }
+}
+
+/// Convert a ProjectRequirement into a Constraint with optional project manifest context.
+pub fn requirement_to_constraint_with_project(
+    req: &ProjectRequirement,
+    project: Option<&unfuck_core::ir::ProjectManifest>,
+    machine: &MachineCapability,
+) -> Option<Constraint> {
+    match &req.kind {
+        RequirementKind::Service { name, min_version } => {
+            if let Some(proj) = project {
+                if let Some((compose_proj, compose_svc)) =
+                    proj.find_compose_service_for_service(name)
+                {
+                    if !compose_proj.can_instantiate {
+                        return Some(Constraint::ComposeConfigUnresolved {
+                            compose_file: compose_proj.file_path.clone(),
+                            project_name: compose_proj.name.clone(),
+                            service_name: Some(compose_svc.name.clone()),
+                            missing_env_files: compose_proj.missing_env_files.clone(),
+                            unresolved_vars: compose_proj.unresolved_env_vars.clone(),
+                        });
+                    }
+
+                    let target_container = machine.find_container_for_compose_service(
+                        compose_proj.name.as_deref(),
+                        &compose_svc.name,
+                        compose_svc.container_name.as_deref(),
+                    );
+
+                    let (expected_state, actual_state) = if let Some(container) = target_container {
+                        let expected = if compose_svc.has_healthcheck {
+                            "healthy".to_string()
+                        } else {
+                            "running".to_string()
+                        };
+                        let actual = container.status.to_string();
+                        (expected, actual)
+                    } else {
+                        ("running".to_string(), "not-created".to_string())
+                    };
+
+                    return Some(Constraint::ComposeServiceState {
+                        compose_file: compose_proj.file_path.clone(),
+                        service_name: compose_svc.name.clone(),
+                        container_name: compose_svc.container_name.clone(),
+                        expected_state,
+                        actual_state,
+                    });
+                }
+            }
+
+            Some(Constraint::ServiceRunning {
+                service: name.clone(),
+                min_version: min_version.clone(),
+            })
+        }
+        _ => requirement_to_constraint(req),
+    }
+}
+
+/// Evaluates all project requirements against machine capabilities with project manifest context.
+pub fn evaluate_project(
+    project: &unfuck_core::ir::ProjectManifest,
+    machine: &MachineCapability,
+) -> Vec<EvaluatedConstraint> {
+    let mut results = Vec::new();
+    for req in &project.requirements {
+        if let Some(constraint) =
+            requirement_to_constraint_with_project(req, Some(project), machine)
+        {
+            if results
+                .iter()
+                .any(|e: &EvaluatedConstraint| e.constraint == constraint)
+            {
+                continue;
+            }
+            let evaluated = evaluate_constraint(&constraint, machine, Some(req.evidence.clone()));
+            results.push(evaluated);
+        }
+    }
+    results
 }
 
 /// Evaluates all project requirements against machine capabilities.

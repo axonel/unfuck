@@ -212,6 +212,82 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
 
                 (format!("conflict.{}", target), chain)
             }
+
+            Constraint::ComposeConfigUnresolved {
+                compose_file,
+                project_name: _,
+                service_name,
+                missing_env_files,
+                unresolved_vars,
+            } => {
+                let s_name = service_name.as_deref().unwrap_or("compose");
+                let mut chain = Vec::new();
+                chain.push(format!(
+                    "Project specification: defines Compose service '{}' in '{}'",
+                    s_name,
+                    compose_file.display()
+                ));
+                if !missing_env_files.is_empty() {
+                    let missing_str = missing_env_files
+                        .iter()
+                        .map(|p| p.display().to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    chain.push(format!(
+                        "Configuration defect: required environment file(s) missing: {}",
+                        missing_str
+                    ));
+                }
+                if !unresolved_vars.is_empty() {
+                    chain.push(format!(
+                        "Unresolved variable(s): {}",
+                        unresolved_vars.join(", ")
+                    ));
+                }
+                chain.push("Violated invariant: compose_config.is_resolvable()".to_string());
+                chain.push(format!(
+                    "Downstream impact: Docker Compose cannot instantiate the stack; service '{}' container cannot be started",
+                    s_name
+                ));
+
+                let root_cause = if !missing_env_files.is_empty() {
+                    format!("missing.env_file:{}", missing_env_files[0].display())
+                } else {
+                    format!("compose.{}.unresolved_vars", s_name)
+                };
+                (root_cause, chain)
+            }
+
+            Constraint::ComposeServiceState {
+                compose_file,
+                service_name,
+                container_name,
+                expected_state,
+                actual_state,
+            } => {
+                let c_str = container_name
+                    .as_deref()
+                    .map(|c| format!(" (container '{}')", c))
+                    .unwrap_or_default();
+                let chain = vec![
+                    format!(
+                        "Project specification: defines Compose service '{}'{} in '{}'",
+                        service_name,
+                        c_str,
+                        compose_file.display()
+                    ),
+                    format!("Host container state: {}", actual_state),
+                    format!(
+                        "Violated invariant: compose_service.{}.state == '{}'",
+                        service_name, expected_state
+                    ),
+                    format!(
+                        "Downstream impact: network connections to service '{}' will fail",
+                        service_name
+                    ),
+                ];
+                (format!("compose.{}.state", service_name), chain)
+            }
         };
 
         let final_root_cause = matching_trace

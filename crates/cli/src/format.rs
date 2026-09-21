@@ -97,6 +97,17 @@ pub fn print_human_summary(
             println!("Environment: {}", parts.join(", "));
         }
     }
+    if !project.compose_projects.is_empty() {
+        let compose_strs: Vec<String> = project
+            .compose_projects
+            .iter()
+            .map(|cp| {
+                let srvs: Vec<&str> = cp.services.iter().map(|s| s.name.as_str()).collect();
+                format!("{} ({})", cp.file_path.display(), srvs.join(", "))
+            })
+            .collect();
+        println!("Compose:     {}", compose_strs.join("; "));
+    }
     println!();
 
     if predictions.is_empty() {

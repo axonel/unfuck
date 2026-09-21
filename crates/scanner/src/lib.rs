@@ -1,3 +1,4 @@
+pub mod containers;
 pub mod env;
 pub mod network;
 pub mod os;
@@ -25,6 +26,7 @@ pub fn scan_machine_for_project(project_context: Option<&Path>) -> MachineCapabi
     let tools = tools::scan_tools(&path_entries, project_context);
     let listening_ports = network::scan_listening_ports();
     let services = services::scan_services(&path_entries, &listening_ports);
+    let containers = containers::scan_containers(&path_entries);
 
     let mut evidence = os_info.evidence;
     evidence.extend(env_evidence);
@@ -40,6 +42,7 @@ pub fn scan_machine_for_project(project_context: Option<&Path>) -> MachineCapabi
         package_managers,
         tools,
         services,
+        containers,
         listening_ports,
         env_vars,
         path_entries,

@@ -228,6 +228,7 @@ struct DirAnalysis {
     declared_ports: Vec<u16>,
     env_vars: Vec<String>,
     env_var_specs: Vec<unfuck_core::ir::EnvVarSpec>,
+    compose_projects: Vec<unfuck_core::ir::ComposeProjectSpec>,
     docker_used: bool,
     evidence: Vec<Evidence>,
 }
@@ -294,6 +295,7 @@ fn analyze_dir(dir: &Path) -> DirAnalysis {
     evidence.extend(env_disc.evidence);
     evidence.extend(tool_disc.evidence);
 
+    let compose_projects = docker_disc.compose_projects;
     let docker_used = docker_disc.docker_used;
     let env_var_specs = env_disc.env_var_specs;
 
@@ -304,6 +306,7 @@ fn analyze_dir(dir: &Path) -> DirAnalysis {
         declared_ports,
         env_vars,
         env_var_specs,
+        compose_projects,
         docker_used,
         evidence,
     }
@@ -334,6 +337,7 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
     let mut declared_ports = root_analysis.declared_ports;
     let mut env_vars = root_analysis.env_vars;
     let mut env_var_specs = root_analysis.env_var_specs;
+    let mut compose_projects = root_analysis.compose_projects;
     let mut docker_used = root_analysis.docker_used;
     let mut evidence = root_analysis.evidence;
 
@@ -373,6 +377,7 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
             || !c_analysis.requirements.is_empty()
             || !c_analysis.declared_ports.is_empty()
             || !c_analysis.env_vars.is_empty()
+            || !c_analysis.compose_projects.is_empty()
         {
             // Register component
             components.push(ProjectComponent {
@@ -392,6 +397,7 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
             declared_ports.extend(c_analysis.declared_ports);
             env_vars.extend(c_analysis.env_vars);
             env_var_specs.extend(c_analysis.env_var_specs);
+            compose_projects.extend(c_analysis.compose_projects);
             docker_used |= c_analysis.docker_used;
             evidence.extend(c_analysis.evidence);
         }
@@ -424,6 +430,7 @@ pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
         env_vars,
         env_var_specs,
         components,
+        compose_projects,
         docker_used,
         evidence,
     })

@@ -1,0 +1,5 @@
+name: project_alpha
+services:
+  database:
+    container_name: alpha_postgres
+    image: postgres:16

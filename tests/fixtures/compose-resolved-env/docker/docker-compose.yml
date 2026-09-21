@@ -1,0 +1,9 @@
+name: compose_resolved_env
+services:
+  database:
+    container_name: app_postgres
+    image: postgres:16
+    env_file:
+      - .env
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD}

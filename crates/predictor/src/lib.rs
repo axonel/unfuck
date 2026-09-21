@@ -16,6 +16,10 @@ pub enum PredictionCategory {
     ConfigurationMissing,
     ConfigurationConflict,
     OsArchMismatch,
+    ComposeConfigMissing,
+    ComposeServiceBlocked,
+    ContainerStopped,
+    ContainerUnhealthy,
 }
 
 /// A structured failure prediction derived from deterministic constraint evaluation.
@@ -265,6 +269,139 @@ pub fn predict_failures(
                         machine_evidence: None,
                     });
                 }
+
+                Constraint::ComposeConfigUnresolved {
+                    compose_file,
+                    project_name: _,
+                    service_name,
+                    missing_env_files,
+                    unresolved_vars,
+                } => {
+                    let target_name = service_name.as_deref().unwrap_or("compose");
+                    let mut details = Vec::new();
+                    if !missing_env_files.is_empty() {
+                        let missing_str = missing_env_files
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        details.push(format!("required env file '{}' is missing", missing_str));
+                    }
+                    if !unresolved_vars.is_empty() {
+                        details.push(format!("unresolved vars: {}", unresolved_vars.join(", ")));
+                    }
+                    let summary = format!(
+                        "Service '{}' defined in '{}' cannot start: {}. Compose project cannot be instantiated.",
+                        target_name,
+                        compose_file.display(),
+                        details.join("; ")
+                    );
+
+                    predictions.push(Prediction {
+                        title: format!(
+                            "Compose service '{}' cannot start: configuration unresolved",
+                            target_name
+                        ),
+                        category: PredictionCategory::ComposeConfigMissing,
+                        summary,
+                        confidence: Confidence::High,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![
+                            target_name.to_string(),
+                            "compose".to_string(),
+                            "docker".to_string(),
+                        ],
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: None,
+                    });
+                }
+
+                Constraint::ComposeServiceState {
+                    compose_file,
+                    service_name,
+                    container_name,
+                    expected_state,
+                    actual_state,
+                } => {
+                    let (category, title, summary) = if actual_state == "not-created" {
+                        (
+                            PredictionCategory::ComposeServiceBlocked,
+                            format!(
+                                "Compose service '{}' is not running (container not created)",
+                                service_name
+                            ),
+                            format!(
+                                "Compose service '{}' in '{}' has no active container on the host. Run 'docker compose up -d {}' to create and start it.",
+                                service_name,
+                                compose_file.display(),
+                                service_name
+                            ),
+                        )
+                    } else if actual_state.starts_with("exited") {
+                        (
+                            PredictionCategory::ContainerStopped,
+                            format!(
+                                "Compose service '{}' container is stopped ({})",
+                                service_name, actual_state
+                            ),
+                            format!(
+                                "Container for service '{}' in '{}' exists but is {}. Start it with 'docker compose up -d {}'.",
+                                service_name,
+                                compose_file.display(),
+                                actual_state,
+                                service_name
+                            ),
+                        )
+                    } else if actual_state.contains("unhealthy") {
+                        (
+                            PredictionCategory::ContainerUnhealthy,
+                            format!(
+                                "Compose service '{}' container is unhealthy",
+                                service_name
+                            ),
+                            format!(
+                                "Container for service '{}' in '{}' is running but failing health checks.",
+                                service_name,
+                                compose_file.display()
+                            ),
+                        )
+                    } else {
+                        (
+                            PredictionCategory::ComposeServiceBlocked,
+                            format!(
+                                "Compose service '{}' state mismatch: {}",
+                                service_name, actual_state
+                            ),
+                            format!(
+                                "Compose service '{}' in '{}' is in state '{}', expected '{}'.",
+                                service_name,
+                                compose_file.display(),
+                                actual_state,
+                                expected_state
+                            ),
+                        )
+                    };
+
+                    let mut affected = vec![
+                        service_name.clone(),
+                        "compose".to_string(),
+                        "docker".to_string(),
+                    ];
+                    if let Some(ref c_name) = container_name {
+                        affected.push(c_name.clone());
+                    }
+
+                    predictions.push(Prediction {
+                        title,
+                        category,
+                        summary,
+                        confidence: Confidence::High,
+                        constraint: eval.constraint.clone(),
+                        affected_components: affected,
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: eval.machine_evidence.clone(),
+                    });
+                }
             }
         }
     }
@@ -304,6 +441,7 @@ mod tests {
             env_vars: vec![],
             env_var_specs: vec![],
             components: vec![],
+            compose_projects: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -319,6 +457,7 @@ mod tests {
             package_managers: vec![],
             tools: vec![],
             services: vec![],
+            containers: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
             path_entries: vec![],
@@ -361,6 +500,7 @@ mod tests {
             env_vars: vec![],
             env_var_specs: vec![],
             components: vec![],
+            compose_projects: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -376,6 +516,7 @@ mod tests {
             package_managers: vec![],
             tools: vec![],
             services: vec![],
+            containers: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
             path_entries: vec![],
@@ -418,6 +559,7 @@ mod tests {
             env_vars: vec![],
             env_var_specs: vec![],
             components: vec![],
+            compose_projects: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -433,6 +575,7 @@ mod tests {
             package_managers: vec![],
             tools: vec![],
             services: vec![],
+            containers: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
             path_entries: vec![],

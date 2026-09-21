@@ -381,6 +381,7 @@ fn test_fixture_mise_pinned_tools() {
         package_managers: vec![],
         tools: vec![],
         services: vec![],
+        containers: vec![],
         listening_ports: vec![],
         env_vars: std::collections::HashMap::new(),
         path_entries: vec![],
@@ -439,6 +440,7 @@ fn test_fixture_exact_runtime_pin() {
         package_managers: vec![],
         tools: vec![],
         services: vec![],
+        containers: vec![],
         listening_ports: vec![],
         env_vars: std::collections::HashMap::new(),
         path_entries: vec![],
@@ -480,5 +482,257 @@ fn test_fixture_duplicate_runtime_sources() {
     assert!(
         !node_req.additional_evidence.is_empty(),
         "Consolidated requirement must preserve package.json evidence"
+    );
+}
+
+#[test]
+fn test_fixture_a_host_postgres_requirement() {
+    let fixture_path = fixtures_dir().join("host-postgres-app");
+    let manifest = analyze_project(&fixture_path).expect("analyze host-postgres-app");
+    assert!(manifest.compose_projects.is_empty());
+    assert!(manifest.requirements.iter().any(|r| r.name == "postgresql"));
+
+    let machine = unfuck_core::ir::MachineCapability::default();
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let pg_eval = evaluated
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::ServiceRunning { service, .. } if service == "postgresql"))
+        .expect("Host postgresql ServiceRunning constraint");
+    assert!(pg_eval.is_violated());
+}
+
+#[test]
+fn test_fixture_b_compose_postgres_healthy() {
+    let fixture_path = fixtures_dir().join("compose-postgres-healthy");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-postgres-healthy");
+    assert_eq!(manifest.compose_projects.len(), 1);
+
+    let mut machine = unfuck_core::ir::MachineCapability::default();
+    machine
+        .containers
+        .push(unfuck_core::ir::ContainerObservation {
+            id: "c123".to_string(),
+            names: vec!["compose_healthy_postgres".to_string()],
+            image: "postgres:16".to_string(),
+            status: unfuck_core::ir::ContainerStatus::Running {
+                healthy: Some(true),
+            },
+            ports: vec![],
+            compose_project: Some("compose_healthy".to_string()),
+            compose_service: Some("database".to_string()),
+            labels: std::collections::HashMap::new(),
+            evidence: unfuck_core::evidence::Evidence::from_repo_file(
+                std::path::PathBuf::from("docker-compose.yml"),
+                None,
+                "Healthy test container",
+            ),
+        });
+
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let pg_eval = evaluated
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::ComposeServiceState { service_name, .. } if service_name == "database"))
+        .expect("ComposeServiceState for database");
+    assert!(
+        pg_eval.is_satisfied(),
+        "Healthy compose container must satisfy constraint"
+    );
+}
+
+#[test]
+fn test_fixture_c_compose_missing_env() {
+    let fixture_path = fixtures_dir().join("compose-missing-env");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-missing-env");
+    assert_eq!(manifest.compose_projects.len(), 1);
+    assert!(!manifest.compose_projects[0].can_instantiate);
+
+    let machine = unfuck_core::ir::MachineCapability::default();
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let config_eval = evaluated
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.constraint,
+                unfuck_constraints::model::Constraint::ComposeConfigUnresolved { .. }
+            )
+        })
+        .expect("ComposeConfigUnresolved constraint");
+    assert!(config_eval.is_violated());
+
+    let env_model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let predictions = unfuck_predictor::predict_failures(&env_model, &evaluated);
+    let pred = predictions
+        .iter()
+        .find(|p| p.category == unfuck_predictor::PredictionCategory::ComposeConfigMissing)
+        .expect("ComposeConfigMissing prediction");
+    assert!(pred.summary.contains("docker/.env"));
+
+    let graph = unfuck_graph::EnvironmentGraph::build(&env_model, &evaluated);
+    let traces = graph.all_causal_traces();
+    let diagnoses = unfuck_diagnosis::diagnose_all(&predictions, &traces);
+    let diag = diagnoses
+        .iter()
+        .find(|d| d.root_cause.contains("missing.env_file"))
+        .expect("missing env file diagnosis");
+    assert!(diag.causal_chain.iter().any(|c| c.contains("docker/.env")));
+}
+
+#[test]
+fn test_fixture_d_compose_resolved_env() {
+    let fixture_path = fixtures_dir().join("compose-resolved-env");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-resolved-env");
+    assert_eq!(manifest.compose_projects.len(), 1);
+    assert!(
+        manifest.compose_projects[0].can_instantiate,
+        "Compose project must be instantiable when .env exists"
+    );
+
+    let machine = unfuck_core::ir::MachineCapability::default();
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    assert!(
+        !evaluated.iter().any(|e| matches!(
+            &e.constraint,
+            unfuck_constraints::model::Constraint::ComposeConfigUnresolved { .. }
+        )),
+        "ComposeConfigUnresolved must NOT be emitted when configuration is resolved"
+    );
+}
+
+#[test]
+fn test_fixture_e_unrelated_postgres_container() {
+    let fixture_path = fixtures_dir().join("unrelated-postgres-container");
+    let manifest = analyze_project(&fixture_path).expect("analyze unrelated-postgres-container");
+
+    // Machine has an unrelated container for project "heym" named "heym-postgres"
+    let mut machine = unfuck_core::ir::MachineCapability::default();
+    machine
+        .containers
+        .push(unfuck_core::ir::ContainerObservation {
+            id: "c999".to_string(),
+            names: vec!["heym-postgres".to_string()],
+            image: "postgres:16".to_string(),
+            status: unfuck_core::ir::ContainerStatus::Running {
+                healthy: Some(true),
+            },
+            ports: vec![],
+            compose_project: Some("heym".to_string()),
+            compose_service: Some("postgres".to_string()),
+            labels: std::collections::HashMap::new(),
+            evidence: unfuck_core::evidence::Evidence::from_repo_file(
+                std::path::PathBuf::from("docker-compose.yml"),
+                None,
+                "Unrelated running container",
+            ),
+        });
+
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let pg_eval = evaluated
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.constraint,
+                unfuck_constraints::model::Constraint::ComposeServiceState { .. }
+            )
+        })
+        .expect("ComposeServiceState constraint");
+
+    if let unfuck_constraints::model::Constraint::ComposeServiceState { actual_state, .. } =
+        &pg_eval.constraint
+    {
+        assert_eq!(
+            actual_state, "not-created",
+            "Unrelated heym-postgres container must NOT satisfy alpha_postgres"
+        );
+    } else {
+        panic!("Expected ComposeServiceState");
+    }
+    assert!(pg_eval.is_violated());
+}
+
+#[test]
+fn test_fixture_f_compose_stopped_container() {
+    let fixture_path = fixtures_dir().join("compose-stopped-container");
+    let manifest = analyze_project(&fixture_path).expect("analyze compose-stopped-container");
+
+    // Machine has matching stopped container
+    let mut machine = unfuck_core::ir::MachineCapability::default();
+    machine
+        .containers
+        .push(unfuck_core::ir::ContainerObservation {
+            id: "c888".to_string(),
+            names: vec!["stopped_postgres".to_string()],
+            image: "postgres:16".to_string(),
+            status: unfuck_core::ir::ContainerStatus::Exited { exit_code: 0 },
+            ports: vec![],
+            compose_project: Some("stopped_proj".to_string()),
+            compose_service: Some("database".to_string()),
+            labels: std::collections::HashMap::new(),
+            evidence: unfuck_core::evidence::Evidence::from_repo_file(
+                std::path::PathBuf::from("docker-compose.yml"),
+                None,
+                "Stopped container",
+            ),
+        });
+
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let pg_eval = evaluated
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.constraint,
+                unfuck_constraints::model::Constraint::ComposeServiceState { .. }
+            )
+        })
+        .expect("ComposeServiceState constraint");
+    assert!(pg_eval.is_violated());
+
+    let env_model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let predictions = unfuck_predictor::predict_failures(&env_model, &evaluated);
+    let pred = predictions
+        .iter()
+        .find(|p| p.category == unfuck_predictor::PredictionCategory::ContainerStopped)
+        .expect("ContainerStopped prediction");
+    assert!(pred.summary.contains("exited (0)"));
+}
+
+#[test]
+fn test_fixture_g_multi_component_java_attribution() {
+    let fixture_path = fixtures_dir().join("multi-component-java-pin");
+    let manifest = analyze_project(&fixture_path).expect("analyze multi-component-java-pin");
+
+    assert_eq!(manifest.components.len(), 2);
+    let web_comp = manifest
+        .components
+        .iter()
+        .find(|c| c.name == "web")
+        .expect("web");
+    let mobile_comp = manifest
+        .components
+        .iter()
+        .find(|c| c.name == "mobile")
+        .expect("mobile");
+
+    assert!(web_comp.languages.iter().any(|l| l.contains("javascript")));
+    assert!(mobile_comp.requirements.iter().any(|r| r.name == "java"));
+
+    let machine = unfuck_core::ir::MachineCapability::default();
+    let evaluated = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let env_model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+
+    let graph = unfuck_graph::EnvironmentGraph::build(&env_model, &evaluated);
+    let traces = graph.all_causal_traces();
+    let java_trace = traces
+        .iter()
+        .find(|t| matches!(&t.constraint, unfuck_constraints::model::Constraint::RuntimeVersion { runtime, .. } if runtime == "java"))
+        .expect("Java trace");
+
+    assert_eq!(
+        java_trace.requirement.as_deref(),
+        Some("mobile"),
+        "Java requirement must be attributed to mobile component, NOT web"
+    );
+    assert!(
+        java_trace.causal_steps[0].contains("mobile"),
+        "Causal step must name mobile component"
     );
 }

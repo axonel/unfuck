@@ -41,6 +41,7 @@ mod tests {
             env_vars: vec![],
             env_var_specs: vec![],
             components: vec![],
+            compose_projects: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -65,6 +66,7 @@ mod tests {
             package_managers: vec![],
             tools: vec![],
             services: vec![],
+            containers: vec![],
             listening_ports: vec![],
             env_vars: HashMap::new(),
             path_entries: vec![PathBuf::from("/usr/bin")],

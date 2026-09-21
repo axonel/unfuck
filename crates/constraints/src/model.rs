@@ -42,6 +42,22 @@ pub enum Constraint {
     EnvVarSet { key: String, required: bool },
     /// Contradictory configuration detected across project specification files.
     ConflictDetected { target: String, details: String },
+    /// Docker Compose configuration cannot be instantiated due to missing env files or unresolved variables.
+    ComposeConfigUnresolved {
+        compose_file: std::path::PathBuf,
+        project_name: Option<String>,
+        service_name: Option<String>,
+        missing_env_files: Vec<std::path::PathBuf>,
+        unresolved_vars: Vec<String>,
+    },
+    /// A Docker Compose service has container state issues or has not been created.
+    ComposeServiceState {
+        compose_file: std::path::PathBuf,
+        service_name: String,
+        container_name: Option<String>,
+        expected_state: String,
+        actual_state: String,
+    },
 }
 
 impl fmt::Display for Constraint {
@@ -107,6 +123,63 @@ impl fmt::Display for Constraint {
             }
             Self::ConflictDetected { target, details } => {
                 write!(f, "Configuration conflict for '{}': {}", target, details)
+            }
+            Self::ComposeConfigUnresolved {
+                compose_file,
+                service_name,
+                missing_env_files,
+                unresolved_vars,
+                ..
+            } => {
+                let mut issues = Vec::new();
+                if !missing_env_files.is_empty() {
+                    issues.push(format!(
+                        "missing env file(s): {}",
+                        missing_env_files
+                            .iter()
+                            .map(|p| p.display().to_string())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
+                if !unresolved_vars.is_empty() {
+                    issues.push(format!(
+                        "unresolved variable(s): {}",
+                        unresolved_vars.join(", ")
+                    ));
+                }
+                let svc_str = service_name
+                    .as_deref()
+                    .map(|s| format!(" for service '{}'", s))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "Docker Compose configuration at '{}'{} must be resolvable ({})",
+                    compose_file.display(),
+                    svc_str,
+                    issues.join("; ")
+                )
+            }
+            Self::ComposeServiceState {
+                compose_file,
+                service_name,
+                container_name,
+                expected_state,
+                actual_state,
+            } => {
+                let c_str = container_name
+                    .as_deref()
+                    .map(|c| format!(" (container '{}')", c))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "Compose service '{}'{} in '{}' state must be '{}', found '{}'",
+                    service_name,
+                    c_str,
+                    compose_file.display(),
+                    expected_state,
+                    actual_state
+                )
             }
         }
     }

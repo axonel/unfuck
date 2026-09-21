@@ -1,0 +1,5 @@
+name: stopped_proj
+services:
+  database:
+    container_name: stopped_postgres
+    image: postgres:16

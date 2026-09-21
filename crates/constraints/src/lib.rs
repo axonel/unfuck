@@ -2,7 +2,10 @@ pub mod evaluator;
 pub mod model;
 pub mod version;
 
-pub use evaluator::{evaluate_all, evaluate_constraint, requirement_to_constraint};
+pub use evaluator::{
+    evaluate_all, evaluate_constraint, evaluate_project, requirement_to_constraint,
+    requirement_to_constraint_with_project,
+};
 pub use model::{Constraint, ConstraintStatus, EvaluatedConstraint};
 pub use version::{
     matches_version_constraint, normalize_semver, parse_version_req, VersionComparator,
@@ -102,6 +105,7 @@ mod tests {
                     "make --version",
                 ),
             }],
+            containers: vec![],
             env_vars: HashMap::new(),
             path_entries: vec![PathBuf::from("/usr/bin")],
             evidence: vec![],

@@ -2,7 +2,7 @@ pub mod format;
 
 use serde::Serialize;
 use std::path::Path;
-use unfuck_constraints::evaluator::evaluate_all;
+use unfuck_constraints::evaluator::evaluate_project;
 use unfuck_constraints::model::EvaluatedConstraint;
 use unfuck_core::ir::{EnvironmentModel, MachineCapability, ProjectManifest};
 use unfuck_diagnosis::{diagnose_all, Diagnosis};
@@ -33,7 +33,7 @@ pub struct PipelineOutput {
 pub fn execute_pipeline(target_path: &Path) -> Result<PipelineOutput, unfuck_core::UnfuckError> {
     let project = analyze_project(target_path)?;
     let machine = unfuck_scanner::scan_machine_for_project(Some(target_path));
-    let evaluated_constraints = evaluate_all(&project.requirements, &machine);
+    let evaluated_constraints = evaluate_project(&project, &machine);
     let env_model = EnvironmentModel::new(project, machine);
     let graph = EnvironmentGraph::build(&env_model, &evaluated_constraints);
     let predictions = predict_failures(&env_model, &evaluated_constraints);

@@ -62,6 +62,7 @@ mod tests {
             env_vars: vec!["DATABASE_URL".to_string()],
             env_var_specs: vec![],
             components: vec![],
+            compose_projects: vec![],
             docker_used: false,
             evidence: vec![],
         };
@@ -86,6 +87,7 @@ mod tests {
             package_managers: vec![],
             tools: vec![],
             services: vec![],
+            containers: vec![],
             listening_ports: vec![PortInfo {
                 port: 8000,
                 state: PortState::Occupied {
