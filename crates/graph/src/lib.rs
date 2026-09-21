@@ -37,6 +37,8 @@ mod tests {
             }],
             declared_ports: vec![],
             env_vars: vec![],
+            env_var_specs: vec![],
+            components: vec![],
             docker_used: false,
             evidence: vec![],
         };

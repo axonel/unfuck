@@ -63,6 +63,9 @@ pub fn verify_environment(
             Constraint::ArchMatch { .. } => {
                 ("arch_compatibility".to_string(), "system".to_string())
             }
+            Constraint::ConflictDetected { target, .. } => {
+                (format!("conflict:{}", target), "configuration".to_string())
+            }
         };
 
         let passed = eval.is_satisfied();
@@ -120,6 +123,8 @@ mod tests {
             requirements: vec![],
             declared_ports: vec![],
             env_vars: vec![],
+            env_var_specs: vec![],
+            components: vec![],
             docker_used: false,
             evidence: vec![],
         };

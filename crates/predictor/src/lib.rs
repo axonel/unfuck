@@ -12,6 +12,7 @@ pub enum PredictionCategory {
     MissingService,
     InsufficientResources,
     ConfigurationMissing,
+    ConfigurationConflict,
     OsArchMismatch,
 }
 
@@ -171,11 +172,44 @@ pub fn predict_failures(
                         machine_evidence: None,
                     });
                 }
+
+                Constraint::ConflictDetected { target, details } => {
+                    predictions.push(Prediction {
+                        title: format!("Contradictory {} configuration detected", target),
+                        category: PredictionCategory::ConfigurationConflict,
+                        summary: format!(
+                            "Project configuration contains conflicting {} requirements: {}.",
+                            target, details
+                        ),
+                        confidence: Confidence::Confirmed,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![
+                            target.clone(),
+                            "configuration".to_string(),
+                            "build".to_string(),
+                        ],
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: None,
+                    });
+                }
             }
         }
     }
 
-    predictions
+    let mut deduped: Vec<Prediction> = Vec::new();
+    for p in predictions {
+        if let Some(existing) = deduped.iter_mut().find(|e| e.constraint == p.constraint) {
+            for comp in p.affected_components {
+                if !existing.affected_components.contains(&comp) {
+                    existing.affected_components.push(comp);
+                }
+            }
+        } else {
+            deduped.push(p);
+        }
+    }
+
+    deduped
 }
 
 #[cfg(test)]
@@ -195,6 +229,8 @@ mod tests {
             requirements: vec![],
             declared_ports: vec![],
             env_vars: vec![],
+            env_var_specs: vec![],
+            components: vec![],
             docker_used: false,
             evidence: vec![],
         };

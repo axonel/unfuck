@@ -138,15 +138,42 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
 
                 (format!("arch.match({})", expected_arch), chain)
             }
+            Constraint::ConflictDetected { target, details } => {
+                let chain = vec![
+                    format!("Configuration conflict detected: {}", details),
+                    format!("Target: {}", target),
+                    "Violated invariant: configuration sources must not specify conflicting requirements".to_string(),
+                    "Downstream impact: unpredictable build or runtime failures due to toolchain or version disagreement".to_string(),
+                ];
+
+                (format!("conflict.{}", target), chain)
+            }
+        };
+
+        let final_root_cause = matching_trace
+            .and_then(|t| t.root_cause.clone())
+            .unwrap_or(root_cause);
+
+        let final_causal_chain = matching_trace
+            .filter(|t| !t.causal_steps.is_empty())
+            .map(|t| t.causal_steps.clone())
+            .unwrap_or(causal_chain);
+
+        let affected_components = if !pred.affected_components.is_empty() {
+            pred.affected_components.clone()
+        } else if let Some(trace) = matching_trace {
+            trace.affected_components.clone()
+        } else {
+            Vec::new()
         };
 
         diagnoses.push(Diagnosis {
             problem: pred.title.clone(),
-            root_cause,
-            causal_chain,
+            root_cause: final_root_cause,
+            causal_chain: final_causal_chain,
             violated_constraint: pred.constraint.to_string(),
             confidence: pred.confidence,
-            affected_components: pred.affected_components.clone(),
+            affected_components,
             project_evidence: pred.project_evidence.clone(),
             machine_evidence: pred.machine_evidence.clone(),
         });

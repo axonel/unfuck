@@ -2,16 +2,18 @@ use crate::model::{CausalTrace, EdgeData, NodeData};
 use petgraph::graph::{DiGraph, NodeIndex};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
+use std::collections::HashMap;
 use unfuck_constraints::model::{Constraint, ConstraintStatus, EvaluatedConstraint};
 use unfuck_core::evidence::Evidence;
 use unfuck_core::ir::EnvironmentModel;
 
-/// The environment graph connecting Project, Requirements, Machine capabilities, Constraints, and Evidence.
+/// The environment graph connecting Project, Components, Requirements, Machine capabilities, Constraints, and Evidence.
 #[derive(Debug, Clone)]
 pub struct EnvironmentGraph {
     pub graph: DiGraph<NodeData, EdgeData>,
     pub project_node: NodeIndex,
     pub machine_node: NodeIndex,
+    pub component_nodes: HashMap<String, NodeIndex>,
 }
 
 impl EnvironmentGraph {
@@ -25,14 +27,25 @@ impl EnvironmentGraph {
             path: model.project.root_path.clone(),
         });
 
-        // 2. Root Machine node
+        // 2. Subcomponents
+        let mut component_nodes = HashMap::new();
+        for comp in &model.project.components {
+            let comp_node = graph.add_node(NodeData::Component {
+                name: comp.name.clone(),
+                path: comp.path.clone(),
+            });
+            graph.add_edge(project_node, comp_node, EdgeData::ContainsComponent);
+            component_nodes.insert(comp.name.clone(), comp_node);
+        }
+
+        // 3. Root Machine node
         let machine_node = graph.add_node(NodeData::Machine {
             os: model.machine.os.clone(),
             arch: model.machine.arch.clone(),
         });
 
-        // 3. Machine capabilities (Runtimes, Services, Ports)
-        let mut runtime_nodes = std::collections::HashMap::new();
+        // 4. Machine capabilities (Runtimes, Services, Ports)
+        let mut runtime_nodes = HashMap::new();
         for rt in &model.machine.runtimes {
             let rt_node = graph.add_node(NodeData::Runtime {
                 name: rt.name.clone(),
@@ -49,7 +62,7 @@ impl EnvironmentGraph {
             runtime_nodes.insert(rt.name.to_lowercase(), (rt_node, rt.clone()));
         }
 
-        let mut service_nodes = std::collections::HashMap::new();
+        let mut service_nodes = HashMap::new();
         for srv in &model.machine.services {
             let srv_node = graph.add_node(NodeData::Service {
                 name: srv.name.clone(),
@@ -66,7 +79,7 @@ impl EnvironmentGraph {
             service_nodes.insert(srv.name.to_lowercase(), (srv_node, srv.clone()));
         }
 
-        let mut port_nodes = std::collections::HashMap::new();
+        let mut port_nodes = HashMap::new();
         for p in &model.machine.listening_ports {
             let p_node = graph.add_node(NodeData::Port {
                 port: p.port,
@@ -82,14 +95,48 @@ impl EnvironmentGraph {
             port_nodes.insert(p.port, (p_node, p.clone()));
         }
 
-        // 4. Project Requirements and Constraints
+        // 5. Connect known service-to-port dependencies
+        if let (Some((pg_node, _)), Some((port_node, _))) =
+            (service_nodes.get("postgresql"), port_nodes.get(&5432))
+        {
+            graph.add_edge(*pg_node, *port_node, EdgeData::TargetsPort);
+        }
+
+        // 6. Project Requirements and Constraints
         for eval in evaluated_constraints {
             let constraint_node = graph.add_node(NodeData::Constraint {
                 constraint: eval.constraint.clone(),
                 status: eval.status.clone(),
             });
 
-            graph.add_edge(project_node, constraint_node, EdgeData::Requires);
+            // Associate constraint with matching component if found, otherwise project
+            let mut associated_comp = None;
+            for (comp_name, comp_idx) in &component_nodes {
+                let comp = model
+                    .project
+                    .components
+                    .iter()
+                    .find(|c| &c.name == comp_name);
+                if let Some(c) = comp {
+                    let matches_comp = match &eval.constraint {
+                        Constraint::RuntimeVersion { runtime, .. } => {
+                            c.languages.iter().any(|l| l.contains(runtime))
+                        }
+                        Constraint::PortAvailable { port } => c.declared_ports.contains(port),
+                        Constraint::EnvVarSet { key, .. } => c.env_vars.contains(key),
+                        _ => false,
+                    };
+                    if matches_comp {
+                        graph.add_edge(*comp_idx, constraint_node, EdgeData::Requires);
+                        associated_comp = Some(comp_name.clone());
+                        break;
+                    }
+                }
+            }
+
+            if associated_comp.is_none() {
+                graph.add_edge(project_node, constraint_node, EdgeData::Requires);
+            }
 
             // Connect project evidence
             if let Some(ref p_ev) = eval.project_evidence {
@@ -140,6 +187,7 @@ impl EnvironmentGraph {
             graph,
             project_node,
             machine_node,
+            component_nodes,
         }
     }
 
@@ -156,7 +204,7 @@ impl EnvironmentGraph {
         violations
     }
 
-    /// Trace the causal chain of a violation node back to project requirements and machine observations.
+    /// Trace the causal chain of a violation node back to project components, requirements, and machine observations.
     pub fn trace_causal_chain(&self, violation_idx: NodeIndex) -> Option<CausalTrace> {
         let weight = self.graph.node_weight(violation_idx)?;
         let (constraint, status) = match weight {
@@ -167,8 +215,9 @@ impl EnvironmentGraph {
         let mut project_evidence: Option<Evidence> = None;
         let mut machine_evidence: Option<Evidence> = None;
         let mut machine_state: Option<String> = None;
+        let mut affected_components = Vec::new();
 
-        // Check outgoing edges from constraint node (SupportedBy -> Evidence)
+        // 1. Traverse outgoing edges from constraint node (SupportedBy -> Evidence)
         for edge in self
             .graph
             .edges_directed(violation_idx, Direction::Outgoing)
@@ -190,7 +239,28 @@ impl EnvironmentGraph {
             }
         }
 
-        // Check incoming edges to constraint node (e.g. from Runtime, Port, or Service)
+        // 2. Traverse incoming edges to find affected component or project
+        for edge in self
+            .graph
+            .edges_directed(violation_idx, Direction::Incoming)
+        {
+            if *edge.weight() == EdgeData::Requires {
+                let source_idx = edge.source();
+                if let Some(NodeData::Component { name, .. }) = self.graph.node_weight(source_idx) {
+                    if !affected_components.contains(name) {
+                        affected_components.push(name.clone());
+                    }
+                } else if let Some(NodeData::Project { name, .. }) =
+                    self.graph.node_weight(source_idx)
+                {
+                    if affected_components.is_empty() {
+                        affected_components.push(name.clone());
+                    }
+                }
+            }
+        }
+
+        // 3. Traverse incoming edges from machine capabilities (Runtime, Port, Service)
         for edge in self
             .graph
             .edges_directed(violation_idx, Direction::Incoming)
@@ -198,73 +268,229 @@ impl EnvironmentGraph {
             match edge.weight() {
                 EdgeData::Violates | EdgeData::EvaluatedAs => {
                     let source_idx = edge.source();
-                    if let Some(src_weight) = self.graph.node_weight(source_idx) {
-                        match src_weight {
-                            NodeData::Runtime {
+                    match self.graph.node_weight(source_idx) {
+                        Some(NodeData::Runtime {
+                            name,
+                            version,
+                            executable_path,
+                        }) => {
+                            machine_state = Some(format!(
+                                "{} {} ({})",
                                 name,
                                 version,
-                                executable_path,
-                            } => {
-                                machine_state = Some(format!(
-                                    "Runtime '{}' is installed at {} (version {})",
-                                    name,
-                                    executable_path.display(),
-                                    version
-                                ));
-                            }
-                            NodeData::Port { port, state } => {
-                                machine_state = Some(format!("Port {} state is {:?}", port, state));
-                            }
-                            NodeData::Service {
-                                name,
-                                status,
-                                version,
-                            } => {
-                                machine_state = Some(format!(
-                                    "Service '{}' status is {:?} (version {:?})",
-                                    name, status, version
-                                ));
-                            }
-                            _ => {}
-                        }
-
-                        // Also find evidence on the source machine capability node
-                        for src_edge in self.graph.edges_directed(source_idx, Direction::Outgoing) {
-                            if *src_edge.weight() == EdgeData::SupportedBy {
-                                if let Some(NodeData::Evidence {
-                                    description,
-                                    confidence,
-                                }) = self.graph.node_weight(src_edge.target())
-                                {
-                                    machine_evidence = Some(Evidence::new(
-                                        unfuck_core::evidence::EvidenceSource::DirectObservation {
-                                            detail: description.clone(),
-                                        },
-                                        *confidence,
-                                        description.clone(),
-                                    ));
+                                executable_path.display()
+                            ));
+                            for out_edge in
+                                self.graph.edges_directed(source_idx, Direction::Outgoing)
+                            {
+                                if *out_edge.weight() == EdgeData::SupportedBy {
+                                    if let Some(NodeData::Evidence {
+                                        description,
+                                        confidence,
+                                    }) = self.graph.node_weight(out_edge.target())
+                                    {
+                                        machine_evidence = Some(Evidence::new(
+                                            unfuck_core::evidence::EvidenceSource::ExecutableInspection {
+                                                path: executable_path.clone(),
+                                                version_string: version.clone(),
+                                                exit_code: 0,
+                                            },
+                                            *confidence,
+                                            description.clone(),
+                                        ));
+                                    }
                                 }
                             }
                         }
+                        Some(NodeData::Port { port, state }) => {
+                            machine_state = Some(format!("port {} occupied ({:?})", port, state));
+                            for out_edge in
+                                self.graph.edges_directed(source_idx, Direction::Outgoing)
+                            {
+                                if *out_edge.weight() == EdgeData::SupportedBy {
+                                    if let Some(NodeData::Evidence {
+                                        description,
+                                        confidence,
+                                    }) = self.graph.node_weight(out_edge.target())
+                                    {
+                                        machine_evidence = Some(Evidence::new(
+                                            unfuck_core::evidence::EvidenceSource::NetworkProbe {
+                                                target: format!("localhost:{}", port),
+                                                outcome: "OCCUPIED".to_string(),
+                                            },
+                                            *confidence,
+                                            description.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        Some(NodeData::Service {
+                            name,
+                            status,
+                            version,
+                        }) => {
+                            machine_state = Some(format!(
+                                "service {} ({:?}, version: {:?})",
+                                name, status, version
+                            ));
+                            for out_edge in
+                                self.graph.edges_directed(source_idx, Direction::Outgoing)
+                            {
+                                if *out_edge.weight() == EdgeData::SupportedBy {
+                                    if let Some(NodeData::Evidence {
+                                        description,
+                                        confidence,
+                                    }) = self.graph.node_weight(out_edge.target())
+                                    {
+                                        machine_evidence = Some(Evidence::new(
+                                            unfuck_core::evidence::EvidenceSource::DirectObservation {
+                                                detail: format!("service: {}", name),
+                                            },
+                                            *confidence,
+                                            description.clone(),
+                                        ));
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
                     }
                 }
                 _ => {}
             }
         }
 
+        // 4. Synthesize root cause and causal steps from graph path
+        let target_comp = affected_components
+            .first()
+            .cloned()
+            .unwrap_or_else(|| "project".to_string());
+        let (root_cause, causal_steps) = match &constraint {
+            Constraint::RuntimeVersion {
+                runtime,
+                constraint_str,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("missing or unresolvable");
+                (
+                    format!("{}.version >= {}", runtime, constraint_str),
+                    vec![
+                        format!(
+                            "Component '{}' requires {} {}",
+                            target_comp, runtime, constraint_str
+                        ),
+                        format!("Host machine runtime: {}", actual),
+                        format!(
+                            "First violated invariant: {} version satisfies {}",
+                            runtime, constraint_str
+                        ),
+                        format!("Impact: {} build or startup cannot proceed", target_comp),
+                    ],
+                )
+            }
+            Constraint::PortAvailable { port } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("occupied by existing socket");
+                (
+                    format!("port:{}.free", port),
+                    vec![
+                        format!("Component '{}' binds to port {}", target_comp, port),
+                        format!("Host network state: {}", actual),
+                        format!(
+                            "First violated invariant: port {} must be free for binding",
+                            port
+                        ),
+                        format!(
+                            "Impact: listener socket collision EADDRINUSE on port {}",
+                            port
+                        ),
+                    ],
+                )
+            }
+            Constraint::ServiceRunning {
+                service,
+                min_version,
+            } => {
+                let ver_str = min_version
+                    .as_deref()
+                    .map(|v| format!(" (>= {})", v))
+                    .unwrap_or_default();
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("service stopped or inactive");
+                (
+                    format!("service.{}.running", service),
+                    vec![
+                        format!(
+                            "Component '{}' depends on service '{}{}'",
+                            target_comp, service, ver_str
+                        ),
+                        format!("Host machine daemon state: {}", actual),
+                        format!(
+                            "First violated invariant: service {} is active and listening",
+                            service
+                        ),
+                        format!("Impact: connection attempts to {} will be refused", service),
+                    ],
+                )
+            }
+            Constraint::EnvVarSet { key, .. } => (
+                format!("env.{}.present", key),
+                vec![
+                    format!(
+                        "Component '{}' declares required environment variable '{}'",
+                        target_comp, key
+                    ),
+                    format!("Host shell environment: variable '{}' is missing", key),
+                    format!("First violated invariant: environment contains '{}'", key),
+                    format!(
+                        "Impact: application configuration initialization for '{}' will fail",
+                        key
+                    ),
+                ],
+            ),
+            Constraint::ConflictDetected { target, details } => (
+                format!("{}.configuration_conflict", target),
+                vec![
+                    format!("Project declares contradictory {} specifications", target),
+                    format!("Conflict details: {}", details),
+                    "First violated invariant: coherent runtime version across configuration files"
+                        .to_string(),
+                    "Impact: build tools will select conflicting runtime versions".to_string(),
+                ],
+            ),
+            _ => (
+                format!("{}", constraint),
+                vec![
+                    format!(
+                        "Component '{}' has requirement: {}",
+                        target_comp, constraint
+                    ),
+                    format!("First violated invariant: {}", constraint),
+                ],
+            ),
+        };
+
         Some(CausalTrace {
             constraint,
             status,
-            requirement: None,
+            requirement: Some(target_comp),
+            root_cause: Some(root_cause),
+            affected_components,
+            causal_steps,
             project_evidence,
             machine_state,
             machine_evidence,
         })
     }
 
-    /// Retrieve causal traces for all violations in the environment.
+    /// Retrieve all causal traces for all violations currently in the graph.
     pub fn all_causal_traces(&self) -> Vec<CausalTrace> {
-        self.find_violations()
+        let violations = self.find_violations();
+        violations
             .into_iter()
             .filter_map(|idx| self.trace_causal_chain(idx))
             .collect()

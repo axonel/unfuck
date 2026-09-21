@@ -12,6 +12,10 @@ pub enum NodeData {
         name: String,
         path: PathBuf,
     },
+    Component {
+        name: String,
+        path: PathBuf,
+    },
     Requirement {
         name: String,
         kind: RequirementKind,
@@ -47,8 +51,12 @@ pub enum NodeData {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EdgeData {
+    ContainsComponent,
     Requires,
     Provides,
+    DependsOn,
+    TargetsPort,
+    UsesRuntime,
     Constrains,
     EvaluatedAs,
     SupportedBy,
@@ -62,6 +70,9 @@ pub struct CausalTrace {
     pub constraint: Constraint,
     pub status: ConstraintStatus,
     pub requirement: Option<String>,
+    pub root_cause: Option<String>,
+    pub affected_components: Vec<String>,
+    pub causal_steps: Vec<String>,
     pub project_evidence: Option<Evidence>,
     pub machine_state: Option<String>,
     pub machine_evidence: Option<Evidence>,
