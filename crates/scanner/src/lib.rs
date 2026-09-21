@@ -1,0 +1,1 @@
+//! Machine scanner for UNFUCK.

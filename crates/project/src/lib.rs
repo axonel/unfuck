@@ -1,0 +1,1 @@
+//! Project analyzer for UNFUCK.
