@@ -91,109 +91,135 @@ pub fn analyze_node(root: &Path) -> NodeDiscovery {
     let pkg_path = root.join("package.json");
     if pkg_path.exists() {
         is_node = true;
-        if let Ok(content) = fs::read_to_string(&pkg_path) {
-            if let Ok(json) = serde_json::from_str::<Value>(&content) {
-                // engines.node
-                if let Some(engines) = json.get("engines") {
-                    if let Some(node_engine) = engines.get("node").and_then(|v| v.as_str()) {
-                        let ev = Evidence::from_repo_file(
-                            PathBuf::from("package.json"),
-                            None,
-                            format!("Node version declared in engines.node: {}", node_engine),
-                        );
-                        requirements.push(ProjectRequirement {
-                            name: "node".to_string(),
-                            kind: RequirementKind::Runtime {
+        match fs::read_to_string(&pkg_path) {
+            Ok(content) => match serde_json::from_str::<Value>(&content) {
+                Ok(json) => {
+                    // engines.node
+                    if let Some(engines) = json.get("engines") {
+                        if let Some(node_engine) = engines.get("node").and_then(|v| v.as_str()) {
+                            let ev = Evidence::from_repo_file(
+                                PathBuf::from("package.json"),
+                                None,
+                                format!("Node version declared in engines.node: {}", node_engine),
+                            );
+                            requirements.push(ProjectRequirement {
                                 name: "node".to_string(),
-                                constraint: node_engine.to_string(),
-                            },
-                            evidence: ev.clone(),
-                        });
-                        evidence.push(ev);
-                    }
-                    if let Some(npm_engine) = engines.get("npm").and_then(|v| v.as_str()) {
-                        let ev = Evidence::from_repo_file(
-                            PathBuf::from("package.json"),
-                            None,
-                            format!("npm version declared in engines.npm: {}", npm_engine),
-                        );
-                        requirements.push(ProjectRequirement {
-                            name: "npm".to_string(),
-                            kind: RequirementKind::PackageManager {
+                                kind: RequirementKind::Runtime {
+                                    name: "node".to_string(),
+                                    constraint: node_engine.to_string(),
+                                },
+                                evidence: ev.clone(),
+                            });
+                            evidence.push(ev);
+                        }
+                        if let Some(npm_engine) = engines.get("npm").and_then(|v| v.as_str()) {
+                            let ev = Evidence::from_repo_file(
+                                PathBuf::from("package.json"),
+                                None,
+                                format!("npm version declared in engines.npm: {}", npm_engine),
+                            );
+                            requirements.push(ProjectRequirement {
                                 name: "npm".to_string(),
-                                constraint: Some(npm_engine.to_string()),
-                            },
-                            evidence: ev.clone(),
-                        });
-                        evidence.push(ev);
-                    }
-                }
-
-                // packageManager field (e.g. "pnpm@9.0.0")
-                if let Some(pm) = json.get("packageManager").and_then(|v| v.as_str()) {
-                    let parts: Vec<&str> = pm.split('@').collect();
-                    let pm_name = parts[0].to_string();
-                    let pm_ver = parts.get(1).map(|s| s.to_string());
-                    if !package_managers.contains(&pm_name) {
-                        package_managers.push(pm_name.clone());
-                    }
-                    let ev = Evidence::from_repo_file(
-                        PathBuf::from("package.json"),
-                        None,
-                        format!("Package manager specified: {}", pm),
-                    );
-                    requirements.push(ProjectRequirement {
-                        name: pm_name.clone(),
-                        kind: RequirementKind::PackageManager {
-                            name: pm_name,
-                            constraint: pm_ver,
-                        },
-                        evidence: ev.clone(),
-                    });
-                    evidence.push(ev);
-                }
-
-                // Scripts
-                if let Some(scripts_obj) = json.get("scripts").and_then(|v| v.as_object()) {
-                    for (name, script_val) in scripts_obj {
-                        scripts.push(name.clone());
-                        if let Some(script_str) = script_val.as_str() {
-                            // Detect port flags e.g. --port 3000 or -p 4017 or PORT=3000
-                            scan_text_for_ports(script_str, &mut ports);
+                                kind: RequirementKind::PackageManager {
+                                    name: "npm".to_string(),
+                                    constraint: Some(npm_engine.to_string()),
+                                },
+                                evidence: ev.clone(),
+                            });
+                            evidence.push(ev);
                         }
                     }
-                }
 
-                // Dependencies: check if pg or postgres or prisma is used
-                let check_db_dep = |dep_name: &str| -> bool {
-                    let in_deps = json
-                        .get("dependencies")
-                        .and_then(|d| d.get(dep_name))
-                        .is_some();
-                    let in_dev = json
-                        .get("devDependencies")
-                        .and_then(|d| d.get(dep_name))
-                        .is_some();
-                    in_deps || in_dev
-                };
+                    // packageManager field (e.g. "pnpm@9.0.0")
+                    if let Some(pm) = json.get("packageManager").and_then(|v| v.as_str()) {
+                        let parts: Vec<&str> = pm.split('@').collect();
+                        let pm_name = parts[0].to_string();
+                        let pm_ver = parts.get(1).map(|s| s.to_string());
+                        if !package_managers.contains(&pm_name) {
+                            package_managers.push(pm_name.clone());
+                        }
+                        let ev = Evidence::from_repo_file(
+                            PathBuf::from("package.json"),
+                            None,
+                            format!("Package manager specified: {}", pm),
+                        );
+                        requirements.push(ProjectRequirement {
+                            name: pm_name.clone(),
+                            kind: RequirementKind::PackageManager {
+                                name: pm_name,
+                                constraint: pm_ver,
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
 
-                if check_db_dep("pg") || check_db_dep("postgres") || check_db_dep("@prisma/client")
-                {
-                    let ev = Evidence::from_repo_file(
-                        PathBuf::from("package.json"),
-                        None,
-                        "PostgreSQL client dependency detected in dependencies",
-                    );
-                    requirements.push(ProjectRequirement {
-                        name: "postgresql".to_string(),
-                        kind: RequirementKind::Service {
+                    // Scripts
+                    if let Some(scripts_obj) = json.get("scripts").and_then(|v| v.as_object()) {
+                        for (name, script_val) in scripts_obj {
+                            scripts.push(name.clone());
+                            if let Some(script_str) = script_val.as_str() {
+                                // Detect port flags e.g. --port 3000 or -p 4017 or PORT=3000
+                                scan_text_for_ports(script_str, &mut ports);
+                            }
+                        }
+                    }
+
+                    // Dependencies: check if pg or postgres or prisma is used
+                    let check_db_dep = |dep_name: &str| -> bool {
+                        let in_deps = json
+                            .get("dependencies")
+                            .and_then(|d| d.get(dep_name))
+                            .is_some();
+                        let in_dev = json
+                            .get("devDependencies")
+                            .and_then(|d| d.get(dep_name))
+                            .is_some();
+                        in_deps || in_dev
+                    };
+
+                    if check_db_dep("pg")
+                        || check_db_dep("postgres")
+                        || check_db_dep("@prisma/client")
+                    {
+                        let ev = Evidence::from_repo_file(
+                            PathBuf::from("package.json"),
+                            None,
+                            "PostgreSQL client dependency detected in dependencies",
+                        );
+                        requirements.push(ProjectRequirement {
                             name: "postgresql".to_string(),
-                            min_version: None,
-                        },
-                        evidence: ev.clone(),
-                    });
-                    evidence.push(ev);
+                            kind: RequirementKind::Service {
+                                name: "postgresql".to_string(),
+                                min_version: None,
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
                 }
+                Err(e) => {
+                    evidence.push(Evidence::new(
+                        unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                            path: PathBuf::from("package.json"),
+                            line: Some(e.line()),
+                            detail: Some(e.to_string()),
+                        },
+                        unfuck_core::Confidence::Confirmed,
+                        format!("Syntax error in package.json (line {}): {}", e.line(), e),
+                    ));
+                }
+            },
+            Err(e) => {
+                evidence.push(Evidence::new(
+                    unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                        path: PathBuf::from("package.json"),
+                        line: None,
+                        detail: Some(e.to_string()),
+                    },
+                    unfuck_core::Confidence::Confirmed,
+                    format!("Failed to read package.json: {}", e),
+                ));
             }
         }
     }

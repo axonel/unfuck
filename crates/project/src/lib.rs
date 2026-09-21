@@ -10,7 +10,20 @@ use unfuck_core::ir::ProjectManifest;
 
 /// Analyze a project repository deterministically and produce a structured manifest.
 pub fn analyze_project(root: &Path) -> Result<ProjectManifest> {
-    let root_buf = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    if !root.exists() {
+        return Err(unfuck_core::UnfuckError::ProjectAnalysis(format!(
+            "Target path '{}' does not exist",
+            root.display()
+        )));
+    }
+    if !root.is_dir() {
+        return Err(unfuck_core::UnfuckError::ProjectAnalysis(format!(
+            "Target path '{}' is not a directory",
+            root.display()
+        )));
+    }
+
+    let root_buf = root.canonicalize().map_err(unfuck_core::UnfuckError::Io)?;
 
     let node_disc = node::analyze_node(&root_buf);
     let py_disc = python::analyze_python(&root_buf);
@@ -143,5 +156,49 @@ dependencies = [
             .iter()
             .find(|r| r.name == "postgresql");
         assert!(pg_req.is_some());
+    }
+
+    #[test]
+    fn test_analyze_nonexistent_path() {
+        let path = Path::new("/path/that/definitely/does/not/exist/9999");
+        let result = analyze_project(path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_analyze_file_not_dir() {
+        let dir = tempdir().unwrap();
+        let file_path = dir.path().join("some_file.txt");
+        fs::write(&file_path, "hello").unwrap();
+        let result = analyze_project(&file_path);
+        assert!(result.is_err());
+        let err_msg = result.unwrap_err().to_string();
+        assert!(err_msg.contains("is not a directory"));
+    }
+
+    #[test]
+    fn test_analyze_malformed_package_json() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("package.json"), "{ invalid json").unwrap();
+        let manifest = analyze_project(dir.path()).unwrap();
+        let syntax_evidence = manifest
+            .evidence
+            .iter()
+            .find(|e| e.description.contains("Syntax error in package.json"));
+        assert!(syntax_evidence.is_some());
+    }
+
+    #[test]
+    fn test_analyze_malformed_pyproject_toml() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("pyproject.toml"), "[invalid toml").unwrap();
+        let manifest = analyze_project(dir.path()).unwrap();
+        let syntax_evidence = manifest
+            .evidence
+            .iter()
+            .find(|e| e.description.contains("Syntax error in pyproject.toml"));
+        assert!(syntax_evidence.is_some());
     }
 }

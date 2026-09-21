@@ -75,98 +75,123 @@ pub fn analyze_python(root: &Path) -> PythonDiscovery {
     let pyproject_path = root.join("pyproject.toml");
     if pyproject_path.exists() {
         is_python = true;
-        if let Ok(content) = fs::read_to_string(&pyproject_path) {
-            if let Ok(toml) = content.parse::<Value>() {
-                // Check [project] requires-python
-                if let Some(req_py) = toml
-                    .get("project")
-                    .and_then(|p| p.get("requires-python"))
-                    .and_then(|v| v.as_str())
-                {
-                    let ev = Evidence::from_repo_file(
-                        PathBuf::from("pyproject.toml"),
-                        None,
-                        format!(
-                            "Python requirement declared in [project].requires-python: {}",
-                            req_py
-                        ),
-                    );
-                    requirements.push(ProjectRequirement {
-                        name: "python".to_string(),
-                        kind: RequirementKind::Runtime {
-                            name: "python".to_string(),
-                            constraint: req_py.to_string(),
-                        },
-                        evidence: ev.clone(),
-                    });
-                    evidence.push(ev);
-                }
-
-                // Check [tool.poetry.dependencies.python]
-                if let Some(poetry_py) = toml
-                    .get("tool")
-                    .and_then(|t| t.get("poetry"))
-                    .and_then(|p| p.get("dependencies"))
-                    .and_then(|d| d.get("python"))
-                    .and_then(|v| v.as_str())
-                {
-                    let ev = Evidence::from_repo_file(
-                        PathBuf::from("pyproject.toml"),
-                        None,
-                        format!(
-                            "Python requirement declared in Poetry dependencies: {}",
-                            poetry_py
-                        ),
-                    );
-                    requirements.push(ProjectRequirement {
-                        name: "python".to_string(),
-                        kind: RequirementKind::Runtime {
-                            name: "python".to_string(),
-                            constraint: poetry_py.to_string(),
-                        },
-                        evidence: ev.clone(),
-                    });
-                    evidence.push(ev);
-                }
-
-                // Check dependencies for PostgreSQL drivers (psycopg, psycopg2, asyncpg)
-                let check_dep = |name: &str| -> bool {
-                    let in_project = toml
+        match fs::read_to_string(&pyproject_path) {
+            Ok(content) => match content.parse::<Value>() {
+                Ok(toml) => {
+                    // Check [project] requires-python
+                    if let Some(req_py) = toml
                         .get("project")
-                        .and_then(|p| p.get("dependencies"))
-                        .and_then(|d| d.as_array())
-                        .map(|arr| {
-                            arr.iter()
-                                .any(|v| v.as_str().map(|s| s.starts_with(name)).unwrap_or(false))
-                        })
-                        .unwrap_or(false);
+                        .and_then(|p| p.get("requires-python"))
+                        .and_then(|v| v.as_str())
+                    {
+                        let ev = Evidence::from_repo_file(
+                            PathBuf::from("pyproject.toml"),
+                            None,
+                            format!(
+                                "Python requirement declared in [project].requires-python: {}",
+                                req_py
+                            ),
+                        );
+                        requirements.push(ProjectRequirement {
+                            name: "python".to_string(),
+                            kind: RequirementKind::Runtime {
+                                name: "python".to_string(),
+                                constraint: req_py.to_string(),
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
 
-                    let in_poetry = toml
+                    // Check [tool.poetry.dependencies.python]
+                    if let Some(poetry_py) = toml
                         .get("tool")
                         .and_then(|t| t.get("poetry"))
                         .and_then(|p| p.get("dependencies"))
-                        .and_then(|d| d.get(name))
-                        .is_some();
+                        .and_then(|d| d.get("python"))
+                        .and_then(|v| v.as_str())
+                    {
+                        let ev = Evidence::from_repo_file(
+                            PathBuf::from("pyproject.toml"),
+                            None,
+                            format!(
+                                "Python requirement declared in Poetry dependencies: {}",
+                                poetry_py
+                            ),
+                        );
+                        requirements.push(ProjectRequirement {
+                            name: "python".to_string(),
+                            kind: RequirementKind::Runtime {
+                                name: "python".to_string(),
+                                constraint: poetry_py.to_string(),
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
 
-                    in_project || in_poetry
-                };
+                    // Check dependencies for PostgreSQL drivers (psycopg, psycopg2, asyncpg)
+                    let check_dep = |name: &str| -> bool {
+                        let in_project = toml
+                            .get("project")
+                            .and_then(|p| p.get("dependencies"))
+                            .and_then(|d| d.as_array())
+                            .map(|arr| {
+                                arr.iter().any(|v| {
+                                    v.as_str().map(|s| s.starts_with(name)).unwrap_or(false)
+                                })
+                            })
+                            .unwrap_or(false);
 
-                if check_dep("psycopg") || check_dep("psycopg2") || check_dep("asyncpg") {
-                    let ev = Evidence::from_repo_file(
-                        PathBuf::from("pyproject.toml"),
-                        None,
-                        "PostgreSQL driver detected in Python dependencies",
-                    );
-                    requirements.push(ProjectRequirement {
-                        name: "postgresql".to_string(),
-                        kind: RequirementKind::Service {
+                        let in_poetry = toml
+                            .get("tool")
+                            .and_then(|t| t.get("poetry"))
+                            .and_then(|p| p.get("dependencies"))
+                            .and_then(|d| d.get(name))
+                            .is_some();
+
+                        in_project || in_poetry
+                    };
+
+                    if check_dep("psycopg") || check_dep("psycopg2") || check_dep("asyncpg") {
+                        let ev = Evidence::from_repo_file(
+                            PathBuf::from("pyproject.toml"),
+                            None,
+                            "PostgreSQL driver detected in Python dependencies",
+                        );
+                        requirements.push(ProjectRequirement {
                             name: "postgresql".to_string(),
-                            min_version: None,
-                        },
-                        evidence: ev.clone(),
-                    });
-                    evidence.push(ev);
+                            kind: RequirementKind::Service {
+                                name: "postgresql".to_string(),
+                                min_version: None,
+                            },
+                            evidence: ev.clone(),
+                        });
+                        evidence.push(ev);
+                    }
                 }
+                Err(e) => {
+                    evidence.push(Evidence::new(
+                        unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                            path: PathBuf::from("pyproject.toml"),
+                            line: None,
+                            detail: Some(e.to_string()),
+                        },
+                        unfuck_core::Confidence::Confirmed,
+                        format!("Syntax error in pyproject.toml: {}", e),
+                    ));
+                }
+            },
+            Err(e) => {
+                evidence.push(Evidence::new(
+                    unfuck_core::evidence::EvidenceSource::RepositoryFile {
+                        path: PathBuf::from("pyproject.toml"),
+                        line: None,
+                        detail: Some(e.to_string()),
+                    },
+                    unfuck_core::Confidence::Confirmed,
+                    format!("Failed to read pyproject.toml: {}", e),
+                ));
             }
         }
     }

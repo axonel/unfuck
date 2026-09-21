@@ -58,6 +58,22 @@ pub enum Commands {
     },
 }
 
+const EXIT_OK: u8 = 0;
+const EXIT_PROBLEMS: u8 = 1;
+const EXIT_ERROR: u8 = 2;
+
+fn handle_error(err: &impl std::fmt::Display, json: bool) -> ExitCode {
+    if json {
+        let err_obj = serde_json::json!({
+            "error": err.to_string(),
+        });
+        println!("{}", serde_json::to_string_pretty(&err_obj).unwrap());
+    } else {
+        eprintln!("Error: {}", err);
+    }
+    ExitCode::from(EXIT_ERROR)
+}
+
 fn main() -> ExitCode {
     let cli = Cli::parse();
 
@@ -88,12 +104,9 @@ fn main() -> ExitCode {
                         );
                     }
                 }
-                ExitCode::SUCCESS
+                ExitCode::from(EXIT_OK)
             }
-            Err(e) => {
-                eprintln!("Error scanning project: {}", e);
-                ExitCode::FAILURE
-            }
+            Err(e) => handle_error(&e, cli.json),
         },
 
         Some(Commands::Predict { path }) => match execute_pipeline(path) {
@@ -111,15 +124,12 @@ fn main() -> ExitCode {
                     }
                 }
                 if out.predictions.is_empty() {
-                    ExitCode::SUCCESS
+                    ExitCode::from(EXIT_OK)
                 } else {
-                    ExitCode::from(1)
+                    ExitCode::from(EXIT_PROBLEMS)
                 }
             }
-            Err(e) => {
-                eprintln!("Error running prediction: {}", e);
-                ExitCode::FAILURE
-            }
+            Err(e) => handle_error(&e, cli.json),
         },
 
         Some(Commands::Explain { path, target }) => match execute_pipeline(path) {
@@ -141,12 +151,9 @@ fn main() -> ExitCode {
                 } else {
                     format::print_diagnoses(&filtered, cli.verbose);
                 }
-                ExitCode::SUCCESS
+                ExitCode::from(EXIT_OK)
             }
-            Err(e) => {
-                eprintln!("Error generating explanation: {}", e);
-                ExitCode::FAILURE
-            }
+            Err(e) => handle_error(&e, cli.json),
         },
 
         Some(Commands::Verify { path }) => match execute_pipeline(path) {
@@ -160,15 +167,12 @@ fn main() -> ExitCode {
                     format::print_verification(&out.verification);
                 }
                 if out.verification.success {
-                    ExitCode::SUCCESS
+                    ExitCode::from(EXIT_OK)
                 } else {
-                    ExitCode::from(1)
+                    ExitCode::from(EXIT_PROBLEMS)
                 }
             }
-            Err(e) => {
-                eprintln!("Error executing verification: {}", e);
-                ExitCode::FAILURE
-            }
+            Err(e) => handle_error(&e, cli.json),
         },
 
         None => {
@@ -199,15 +203,12 @@ fn main() -> ExitCode {
                     }
 
                     if has_failures {
-                        ExitCode::from(1)
+                        ExitCode::from(EXIT_PROBLEMS)
                     } else {
-                        ExitCode::SUCCESS
+                        ExitCode::from(EXIT_OK)
                     }
                 }
-                Err(e) => {
-                    eprintln!("Error running UNFUCK: {}", e);
-                    ExitCode::FAILURE
-                }
+                Err(e) => handle_error(&e, cli.json),
             }
         }
     }
