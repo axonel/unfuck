@@ -20,6 +20,9 @@ pub enum PredictionCategory {
     ComposeServiceBlocked,
     ContainerStopped,
     ContainerUnhealthy,
+    CompilerMissing,
+    LanguagePackageMissing,
+    SystemLibraryMissing,
 }
 
 /// A structured failure prediction derived from deterministic constraint evaluation.
@@ -100,6 +103,9 @@ pub fn predict_failures(
                     constraint,
                     scope,
                 } => {
+                    if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                        continue;
+                    }
                     let constraint_desc = match constraint {
                         Some(c) => format!(" {}", c),
                         None => String::new(),
@@ -140,6 +146,94 @@ pub fn predict_failures(
                             name.clone(),
                             format!("{:?}", kind).to_lowercase(),
                         ],
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: eval.machine_evidence.clone(),
+                    });
+                }
+
+                Constraint::CompilerAvailable {
+                    language,
+                    min_standard,
+                    constraint,
+                } => {
+                    let std_str = min_standard
+                        .as_deref()
+                        .map(|s| format!(" standard {}", s))
+                        .unwrap_or_default();
+                    let ver_str = constraint
+                        .as_ref()
+                        .map(|c| format!(" version {}", c))
+                        .unwrap_or_default();
+                    predictions.push(Prediction {
+                        title: format!("{} compiler missing or incompatible", language),
+                        category: PredictionCategory::CompilerMissing,
+                        summary: format!(
+                            "Project requires compiler for '{}{}{}', but {}. Compilation is predicted to fail.",
+                            language, std_str, ver_str, reason
+                        ),
+                        confidence: Confidence::High,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![language.clone(), "compiler".to_string(), "build".to_string()],
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: eval.machine_evidence.clone(),
+                    });
+                }
+
+                Constraint::LanguagePackageAvailable {
+                    language,
+                    package,
+                    constraint,
+                    scope,
+                } => {
+                    if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                        continue;
+                    }
+                    let ver_str = constraint
+                        .as_ref()
+                        .map(|c| format!(" {}", c))
+                        .unwrap_or_default();
+                    predictions.push(Prediction {
+                        title: format!("{} package '{}' missing", language, package),
+                        category: PredictionCategory::LanguagePackageMissing,
+                        summary: format!(
+                            "Project requires {} package '{}{}', but {}. Build or execution is predicted to fail.",
+                            language, package, ver_str, reason
+                        ),
+                        confidence: Confidence::High,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![format!("{}:{}", language, package), "dependencies".to_string(), "build".to_string()],
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: eval.machine_evidence.clone(),
+                    });
+                }
+
+                Constraint::SystemLibraryAvailable {
+                    name,
+                    header,
+                    constraint,
+                    scope,
+                } => {
+                    if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                        continue;
+                    }
+                    let header_clause = header
+                        .as_deref()
+                        .map(|h| format!(" (header '{}')", h))
+                        .unwrap_or_default();
+                    let ver_str = constraint
+                        .as_ref()
+                        .map(|c| format!(" {}", c))
+                        .unwrap_or_default();
+                    predictions.push(Prediction {
+                        title: format!("System library '{}' missing", name),
+                        category: PredictionCategory::SystemLibraryMissing,
+                        summary: format!(
+                            "Project requires system library '{}{}{}', but {}. Build or link phase is predicted to fail.",
+                            name, header_clause, ver_str, reason
+                        ),
+                        confidence: Confidence::High,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![name.clone(), "libraries".to_string(), "build".to_string()],
                         project_evidence: eval.project_evidence.clone(),
                         machine_evidence: eval.machine_evidence.clone(),
                     });

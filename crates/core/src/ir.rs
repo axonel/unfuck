@@ -120,6 +120,26 @@ pub enum RequirementKind {
         details: String,
         competing_sources: Vec<String>,
     },
+    /// Compiler for a compiled language (e.g. C, C++, Fortran).
+    Compiler {
+        language: String,
+        min_standard: Option<String>,
+        constraint: Option<VersionConstraint>,
+    },
+    /// Language-specific package or module required at build-time or runtime (e.g. python module jinja2 or requests).
+    LanguagePackage {
+        language: String,
+        package: String,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
+    },
+    /// Native system library or development package (e.g. openssl, zlib, libpng).
+    SystemLibrary {
+        name: String,
+        header: Option<String>,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
+    },
 }
 
 /// A specific requirement declared by a project, preserving evidence and multi-source provenance.
@@ -130,6 +150,8 @@ pub struct ProjectRequirement {
     pub evidence: Evidence,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub additional_evidence: Vec<Evidence>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub platform: Option<String>,
 }
 
 impl ProjectRequirement {
@@ -139,7 +161,13 @@ impl ProjectRequirement {
             kind,
             evidence,
             additional_evidence: Vec::new(),
+            platform: None,
         }
+    }
+
+    pub fn with_platform(mut self, platform: impl Into<String>) -> Self {
+        self.platform = Some(platform.into());
+        self
     }
 }
 

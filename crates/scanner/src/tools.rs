@@ -43,8 +43,14 @@ pub fn classify_tool_kind(name: &str) -> ToolKind {
         || lower == "make"
         || lower == "cmake"
         || lower == "ninja"
+        || lower == "meson"
+        || lower == "pkg-config"
+        || lower == "pkgconf"
         || lower == "gcc"
         || lower == "clang"
+        || lower == "cc"
+        || lower == "g++"
+        || lower == "clang++"
     {
         ToolKind::BuildTool
     } else {
@@ -161,6 +167,15 @@ pub fn scan_tools(
         "make",
         "cmake",
         "ninja",
+        "meson",
+        "pkg-config",
+        "pkgconf",
+        "gcc",
+        "clang",
+        "cc",
+        "g++",
+        "clang++",
+        "c++",
         "opentofu",
         "terraform",
         "terragrunt",

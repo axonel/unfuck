@@ -67,6 +67,26 @@ pub enum Constraint {
         expected_state: String,
         actual_state: String,
     },
+    /// A compiler for the specified language must be available and satisfy standards/constraints.
+    CompilerAvailable {
+        language: String,
+        min_standard: Option<String>,
+        constraint: Option<VersionConstraint>,
+    },
+    /// A language package/module must be importable in the runtime environment.
+    LanguagePackageAvailable {
+        language: String,
+        package: String,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
+    },
+    /// A system library or development header must be present on the host.
+    SystemLibraryAvailable {
+        name: String,
+        header: Option<String>,
+        constraint: Option<VersionConstraint>,
+        scope: ToolScope,
+    },
 }
 
 impl fmt::Display for Constraint {
@@ -99,6 +119,61 @@ impl fmt::Display for Constraint {
                     f,
                     "{} '{}'{} must be available (scope: {:?})",
                     kind, name, ver_str, scope
+                )
+            }
+            Self::CompilerAvailable {
+                language,
+                min_standard,
+                constraint,
+            } => {
+                let std_str = min_standard
+                    .as_ref()
+                    .map(|s| format!(" standard {}", s))
+                    .unwrap_or_default();
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" version {}", c))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "Compiler for '{}'{}{} must be available",
+                    language, std_str, ver_str
+                )
+            }
+            Self::LanguagePackageAvailable {
+                language,
+                package,
+                constraint,
+                scope,
+            } => {
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" ({})", c))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "{} package '{}'{} must be available (scope: {:?})",
+                    language, package, ver_str, scope
+                )
+            }
+            Self::SystemLibraryAvailable {
+                name,
+                header,
+                constraint,
+                scope,
+            } => {
+                let header_str = header
+                    .as_ref()
+                    .map(|h| format!(" with header '{}'", h))
+                    .unwrap_or_default();
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" ({})", c))
+                    .unwrap_or_default();
+                write!(
+                    f,
+                    "System library '{}'{}{} must be installed (scope: {:?})",
+                    name, header_str, ver_str, scope
                 )
             }
             Self::PortAvailable { port } => write!(f, "Port {} must be available", port),

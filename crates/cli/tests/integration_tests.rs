@@ -1003,3 +1003,307 @@ fn test_fixture_bootstrap_copy_template() {
         "Bootstrap action from Makefile must be recognized"
     );
 }
+
+#[test]
+fn test_fixture_build_system_compiler() {
+    let fixture_path = fixtures_dir().join("fixture-build-system-compiler");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-build-system-compiler");
+
+    assert!(manifest.languages.contains(&"c".to_string()));
+    assert!(manifest.requirements.iter().any(|r| r.name == "meson"));
+    assert!(manifest.requirements.iter().any(|r| r.name == "ninja"));
+    assert!(manifest.requirements.iter().any(|r| r.name == "c"));
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    // C compiler should be satisfied on a host with gcc or clang installed
+    let compiler_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::CompilerAvailable { language, .. } if language == "c"))
+        .expect("compiler eval");
+    assert_eq!(
+        compiler_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+}
+
+#[test]
+fn test_fixture_build_system_python() {
+    let fixture_path = fixtures_dir().join("fixture-build-system-python");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-build-system-python");
+
+    assert!(manifest.requirements.iter().any(|r| matches!(
+        &r.kind,
+        unfuck_core::ir::RequirementKind::LanguagePackage { package, scope, .. }
+            if package == "nonexistent_build_module" && *scope == unfuck_core::ir::ToolScope::RequiredForBuild
+    )));
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let pkg_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::LanguagePackageAvailable { package, .. } if package == "nonexistent_build_module"))
+        .expect("pkg eval");
+    assert!(matches!(
+        pkg_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(preds
+        .iter()
+        .any(|p| p.category == unfuck_predictor::PredictionCategory::LanguagePackageMissing));
+}
+
+#[test]
+fn test_fixture_system_library() {
+    let fixture_path = fixtures_dir().join("fixture-system-library");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-system-library");
+
+    // Verify required vs optional scopes
+    let req_lib = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "nonexistent_system_lib_xyz")
+        .expect("req lib");
+    assert!(
+        matches!(&req_lib.kind, unfuck_core::ir::RequirementKind::SystemLibrary { scope, .. } if *scope == unfuck_core::ir::ToolScope::RequiredForBuild)
+    );
+
+    let opt_lib = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "some_optional_lib_abc")
+        .expect("opt lib");
+    assert!(
+        matches!(&opt_lib.kind, unfuck_core::ir::RequirementKind::SystemLibrary { scope, .. } if *scope == unfuck_core::ir::ToolScope::Optional)
+    );
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+
+    // Required library should be violated
+    let req_eval = evals.iter().find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::SystemLibraryAvailable { name, .. } if name == "nonexistent_system_lib_xyz")).expect("req eval");
+    assert!(matches!(
+        req_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+
+    // Optional library should be satisfied (false-positive control)
+    let opt_eval = evals.iter().find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::SystemLibraryAvailable { name, .. } if name == "some_optional_lib_abc")).expect("opt eval");
+    assert_eq!(
+        opt_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(preds
+        .iter()
+        .any(|p| p.category == unfuck_predictor::PredictionCategory::SystemLibraryMissing));
+    // Optional library should NOT be in predictions
+    assert!(!preds
+        .iter()
+        .any(|p| p.summary.contains("some_optional_lib_abc")));
+}
+
+#[test]
+fn test_fixture_build_tool_version() {
+    let fixture_path = fixtures_dir().join("fixture-build-tool-version");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-build-tool-version");
+
+    let meson_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "meson")
+        .expect("meson req");
+    match &meson_req.kind {
+        unfuck_core::ir::RequirementKind::BuildTool { constraint, .. } => {
+            assert!(constraint.is_some());
+        }
+        _ => panic!("Expected BuildTool"),
+    }
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let meson_eval = evals.iter().find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::ToolAvailable { name, .. } if name == "meson")).expect("meson eval");
+    assert!(matches!(
+        meson_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+}
+
+#[test]
+fn test_fixture_cmake_version() {
+    let fixture_path = fixtures_dir().join("fixture-cmake-version");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-cmake-version");
+
+    let cmake_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "cmake")
+        .expect("cmake req");
+    match &cmake_req.kind {
+        unfuck_core::ir::RequirementKind::BuildTool {
+            constraint, scope, ..
+        } => {
+            assert_eq!(*scope, unfuck_core::ir::ToolScope::RequiredForBuild);
+            assert!(constraint.is_some());
+            assert!(constraint.as_ref().unwrap().matches("99.0"));
+            assert!(!constraint.as_ref().unwrap().matches("3.20.0"));
+        }
+        _ => panic!("Expected BuildTool"),
+    }
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let cmake_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::ToolAvailable { name, .. } if name == "cmake"))
+        .expect("cmake eval");
+    assert!(matches!(
+        cmake_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(preds
+        .iter()
+        .any(|p| p.category == unfuck_predictor::PredictionCategory::ToolMissing));
+}
+
+#[test]
+fn test_fixture_cmake_compiler() {
+    let fixture_path = fixtures_dir().join("fixture-cmake-compiler");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-cmake-compiler");
+
+    assert!(manifest.languages.contains(&"c".to_string()));
+
+    let c_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "c")
+        .expect("c compiler req");
+    match &c_req.kind {
+        unfuck_core::ir::RequirementKind::Compiler {
+            language,
+            min_standard,
+            ..
+        } => {
+            assert_eq!(language, "c");
+            assert_eq!(min_standard.as_deref(), Some("c11"));
+        }
+        _ => panic!("Expected Compiler"),
+    }
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let c_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::CompilerAvailable { language, .. } if language == "c"))
+        .expect("c eval");
+    // Host has GCC 15 supporting c11, so it should be satisfied
+    assert_eq!(
+        c_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+}
+
+#[test]
+fn test_fixture_cmake_package_required() {
+    let fixture_path = fixtures_dir().join("fixture-cmake-package");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-cmake-package");
+
+    let pkg_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "nonexistenttestpackage")
+        .expect("nonexistenttestpackage req");
+    assert!(
+        matches!(&pkg_req.kind, unfuck_core::ir::RequirementKind::SystemLibrary { scope, .. } if *scope == unfuck_core::ir::ToolScope::RequiredForBuild)
+    );
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let pkg_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::SystemLibraryAvailable { name, .. } if name == "nonexistenttestpackage"))
+        .expect("pkg eval");
+    assert!(matches!(
+        pkg_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(preds
+        .iter()
+        .any(|p| p.category == unfuck_predictor::PredictionCategory::SystemLibraryMissing));
+}
+
+#[test]
+fn test_fixture_cmake_optional_package() {
+    let fixture_path = fixtures_dir().join("fixture-cmake-optional-package");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-cmake-optional-package");
+
+    let opt_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "optionaltestpackage")
+        .expect("optionaltestpackage req");
+    assert!(
+        matches!(&opt_req.kind, unfuck_core::ir::RequirementKind::SystemLibrary { scope, .. } if *scope == unfuck_core::ir::ToolScope::Optional)
+    );
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let opt_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::SystemLibraryAvailable { name, .. } if name == "optionaltestpackage"))
+        .expect("opt eval");
+    // Strict false-positive control: optional package evaluates as Satisfied
+    assert_eq!(
+        opt_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(!preds
+        .iter()
+        .any(|p| p.summary.contains("optionaltestpackage")));
+}
+
+#[test]
+fn test_fixture_cmake_system_library() {
+    let fixture_path = fixtures_dir().join("fixture-cmake-system-library");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-cmake-system-library");
+
+    let lib_req = manifest
+        .requirements
+        .iter()
+        .find(|r| r.name == "nonexistent_native_lib")
+        .expect("nonexistent_native_lib req");
+    assert!(
+        matches!(&lib_req.kind, unfuck_core::ir::RequirementKind::SystemLibrary { scope, .. } if *scope == unfuck_core::ir::ToolScope::RequiredForBuild)
+    );
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let lib_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::SystemLibraryAvailable { name, .. } if name == "nonexistent_native_lib"))
+        .expect("lib eval");
+    assert!(matches!(
+        lib_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(preds
+        .iter()
+        .any(|p| p.category == unfuck_predictor::PredictionCategory::SystemLibraryMissing));
+}

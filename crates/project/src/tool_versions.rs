@@ -138,12 +138,7 @@ pub fn analyze_tool_versions(root: &Path) -> ToolVersionsDiscovery {
                         format!("Tool '{}' version {} declared in .tool-versions", tool, ver),
                     );
 
-                    requirements.push(ProjectRequirement {
-                        name: req_name,
-                        kind,
-                        evidence: ev.clone(),
-                        additional_evidence: Vec::new(),
-                    });
+                    requirements.push(ProjectRequirement::new(req_name, kind, ev.clone()));
                     evidence.push(ev);
                 }
             }
@@ -177,12 +172,11 @@ pub fn analyze_tool_versions(root: &Path) -> ToolVersionsDiscovery {
                                     ),
                                 );
 
-                                requirements.push(ProjectRequirement {
-                                    name: req_name,
+                                requirements.push(ProjectRequirement::new(
+                                    req_name,
                                     kind,
-                                    evidence: ev.clone(),
-                                    additional_evidence: Vec::new(),
-                                });
+                                    ev.clone(),
+                                ));
                                 evidence.push(ev);
                             }
                         }

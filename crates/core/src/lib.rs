@@ -57,6 +57,7 @@ mod tests {
                     "requires-python >= 3.11",
                 ),
                 additional_evidence: vec![],
+                platform: None,
             }],
             declared_ports: vec![8000],
             env_vars: vec!["DATABASE_URL".to_string()],

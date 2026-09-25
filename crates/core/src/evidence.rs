@@ -43,6 +43,20 @@ pub enum EvidenceSource {
         summary: String,
         files: Vec<PathBuf>,
     },
+    /// Statically declared or enforced by project build configuration (e.g. meson.build, CMakeLists.txt).
+    BuildConfiguration {
+        path: PathBuf,
+        line: Option<usize>,
+        detail: Option<String>,
+    },
+    /// Extracted from documentation or guides (recommendation or prose).
+    Documentation {
+        path: PathBuf,
+        line: Option<usize>,
+        text: String,
+    },
+    /// Inferred requirement derived from build-system conventions (e.g. default backend).
+    InferredRequirement { detail: String },
 }
 
 /// Traceable evidence supporting an observation, constraint, or diagnosis.

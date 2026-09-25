@@ -1,7 +1,9 @@
 pub mod bootstrap;
+pub mod cmake;
 pub mod docker;
 pub mod env;
 pub mod go;
+pub mod meson;
 pub mod node;
 pub mod python;
 pub mod rust;
@@ -23,6 +25,9 @@ enum EntityKey {
     DeveloperTool(String),
     BuildTool(String),
     CodeGenerator(String),
+    Compiler(String),
+    LanguagePackage(String, String),
+    SystemLibrary(String),
     Service(String),
     Port(u16),
     EnvVar(String),
@@ -41,6 +46,13 @@ fn get_entity_key(req: &ProjectRequirement) -> EntityKey {
         RequirementKind::BuildTool { name, .. } => EntityKey::BuildTool(name.to_lowercase()),
         RequirementKind::CodeGenerator { name, .. } => {
             EntityKey::CodeGenerator(name.to_lowercase())
+        }
+        RequirementKind::Compiler { language, .. } => EntityKey::Compiler(language.to_lowercase()),
+        RequirementKind::LanguagePackage {
+            language, package, ..
+        } => EntityKey::LanguagePackage(language.to_lowercase(), package.to_lowercase()),
+        RequirementKind::SystemLibrary { name, .. } => {
+            EntityKey::SystemLibrary(name.to_lowercase())
         }
         RequirementKind::Service { name, .. } => EntityKey::Service(name.to_lowercase()),
         RequirementKind::Port { port, .. } => EntityKey::Port(*port),
@@ -206,6 +218,164 @@ pub fn consolidate_requirements(requirements: Vec<ProjectRequirement>) -> Vec<Pr
                     existing.additional_evidence.push(req.evidence);
                     existing.additional_evidence.extend(req.additional_evidence);
                 }
+                (
+                    RequirementKind::BuildTool {
+                        name,
+                        constraint: c1,
+                        scope: s1,
+                    },
+                    RequirementKind::BuildTool {
+                        constraint: c2,
+                        scope: s2,
+                        ..
+                    },
+                ) => {
+                    let merged_scope = match (s1, s2) {
+                        (unfuck_core::ir::ToolScope::RequiredForBuild, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForBuild) => {
+                            unfuck_core::ir::ToolScope::RequiredForBuild
+                        }
+                        (unfuck_core::ir::ToolScope::RequiredForTask, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForTask) => {
+                            unfuck_core::ir::ToolScope::RequiredForTask
+                        }
+                        _ => *s1,
+                    };
+                    let merged_constraint = match (c1, c2) {
+                        (Some(v1), Some(v2)) => match v1.intersect(v2) {
+                            Ok(intersected) => Some(intersected),
+                            Err(_) => Some(v1.clone()),
+                        },
+                        (Some(v), None) | (None, Some(v)) => Some(v.clone()),
+                        (None, None) => None,
+                    };
+                    existing.kind = RequirementKind::BuildTool {
+                        name: name.clone(),
+                        constraint: merged_constraint,
+                        scope: merged_scope,
+                    };
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
+                }
+                (
+                    RequirementKind::Compiler {
+                        language,
+                        min_standard: s1,
+                        constraint: c1,
+                    },
+                    RequirementKind::Compiler {
+                        min_standard: s2,
+                        constraint: c2,
+                        ..
+                    },
+                ) => {
+                    let merged_standard = match (s1, s2) {
+                        (Some(v1), Some(v2)) => {
+                            if cmake::std_rank(language, v2) > cmake::std_rank(language, v1) {
+                                Some(v2.clone())
+                            } else {
+                                Some(v1.clone())
+                            }
+                        }
+                        (Some(v), None) | (None, Some(v)) => Some(v.clone()),
+                        (None, None) => None,
+                    };
+                    let merged_constraint = match (c1, c2) {
+                        (Some(v1), Some(v2)) => match v1.intersect(v2) {
+                            Ok(inter) => Some(inter),
+                            Err(_) => Some(v1.clone()),
+                        },
+                        (Some(v), None) | (None, Some(v)) => Some(v.clone()),
+                        (None, None) => None,
+                    };
+                    existing.kind = RequirementKind::Compiler {
+                        language: language.clone(),
+                        min_standard: merged_standard,
+                        constraint: merged_constraint,
+                    };
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
+                }
+                (
+                    RequirementKind::SystemLibrary {
+                        name,
+                        header: h1,
+                        constraint: c1,
+                        scope: s1,
+                    },
+                    RequirementKind::SystemLibrary {
+                        header: h2,
+                        constraint: c2,
+                        scope: s2,
+                        ..
+                    },
+                ) => {
+                    let merged_scope = match (s1, s2) {
+                        (unfuck_core::ir::ToolScope::RequiredForBuild, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForBuild) => {
+                            unfuck_core::ir::ToolScope::RequiredForBuild
+                        }
+                        (unfuck_core::ir::ToolScope::RequiredForTask, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForTask) => {
+                            unfuck_core::ir::ToolScope::RequiredForTask
+                        }
+                        _ => *s1,
+                    };
+                    let merged_header = h1.clone().or_else(|| h2.clone());
+                    let merged_constraint = match (c1, c2) {
+                        (Some(v1), Some(v2)) => match v1.intersect(v2) {
+                            Ok(inter) => Some(inter),
+                            Err(_) => Some(v1.clone()),
+                        },
+                        (Some(v), None) | (None, Some(v)) => Some(v.clone()),
+                        (None, None) => None,
+                    };
+                    existing.kind = RequirementKind::SystemLibrary {
+                        name: name.clone(),
+                        header: merged_header,
+                        constraint: merged_constraint,
+                        scope: merged_scope,
+                    };
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
+                }
+                (
+                    RequirementKind::LanguagePackage {
+                        language,
+                        package,
+                        constraint: c1,
+                        scope: s1,
+                    },
+                    RequirementKind::LanguagePackage {
+                        constraint: c2,
+                        scope: s2,
+                        ..
+                    },
+                ) => {
+                    let merged_scope = match (s1, s2) {
+                        (unfuck_core::ir::ToolScope::RequiredForBuild, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForBuild) => {
+                            unfuck_core::ir::ToolScope::RequiredForBuild
+                        }
+                        _ => *s1,
+                    };
+                    let merged_constraint = match (c1, c2) {
+                        (Some(v1), Some(v2)) => match v1.intersect(v2) {
+                            Ok(inter) => Some(inter),
+                            Err(_) => Some(v1.clone()),
+                        },
+                        (Some(v), None) | (None, Some(v)) => Some(v.clone()),
+                        (None, None) => None,
+                    };
+                    existing.kind = RequirementKind::LanguagePackage {
+                        language: language.clone(),
+                        package: package.clone(),
+                        constraint: merged_constraint,
+                        scope: merged_scope,
+                    };
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
+                }
                 _ => {
                     existing.additional_evidence.push(req.evidence);
                     existing.additional_evidence.extend(req.additional_evidence);
@@ -240,6 +410,8 @@ fn analyze_dir(dir: &Path) -> DirAnalysis {
     let py_disc = python::analyze_python(dir);
     let rust_disc = rust::analyze_rust(dir);
     let go_disc = go::analyze_go(dir);
+    let meson_disc = meson::analyze_meson(dir);
+    let cmake_disc = cmake::analyze_cmake(dir);
     let docker_disc = docker::analyze_docker(dir);
     let env_disc = env::analyze_env(dir);
     let tool_disc = tool_versions::analyze_tool_versions(dir);
@@ -260,6 +432,10 @@ fn analyze_dir(dir: &Path) -> DirAnalysis {
     if go_disc.is_go {
         languages.push("go".to_string());
     }
+    languages.extend(meson_disc.languages);
+    languages.extend(cmake_disc.languages);
+    languages.sort();
+    languages.dedup();
 
     let mut package_managers = node_disc.package_managers;
     package_managers.extend(py_disc.package_managers);
@@ -272,6 +448,8 @@ fn analyze_dir(dir: &Path) -> DirAnalysis {
     requirements.extend(py_disc.requirements);
     requirements.extend(rust_disc.requirements);
     requirements.extend(go_disc.requirements);
+    requirements.extend(meson_disc.requirements);
+    requirements.extend(cmake_disc.requirements);
     requirements.extend(docker_disc.requirements);
     requirements.extend(env_disc.requirements);
     requirements.extend(tool_disc.requirements);
@@ -292,6 +470,8 @@ fn analyze_dir(dir: &Path) -> DirAnalysis {
     evidence.extend(py_disc.evidence);
     evidence.extend(rust_disc.evidence);
     evidence.extend(go_disc.evidence);
+    evidence.extend(meson_disc.evidence);
+    evidence.extend(cmake_disc.evidence);
     evidence.extend(docker_disc.evidence);
     evidence.extend(env_disc.evidence);
     evidence.extend(tool_disc.evidence);

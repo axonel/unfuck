@@ -238,6 +238,15 @@ impl EnvironmentGraph {
                         Constraint::ToolAvailable { name, .. } => {
                             c.requirements.iter().any(|r| r.name == *name)
                         }
+                        Constraint::CompilerAvailable { language, .. } => {
+                            c.requirements.iter().any(|r| r.name == *language)
+                        }
+                        Constraint::LanguagePackageAvailable { package, .. } => {
+                            c.requirements.iter().any(|r| r.name.contains(package))
+                        }
+                        Constraint::SystemLibraryAvailable { name, .. } => {
+                            c.requirements.iter().any(|r| r.name == *name)
+                        }
                         Constraint::PortAvailable { port } => c.declared_ports.contains(port),
                         Constraint::EnvVarSet { key, .. } => c.env_vars.contains(key),
                         Constraint::ComposeServiceState { service_name, .. }
@@ -714,6 +723,106 @@ impl EnvironmentGraph {
                         format!("Host machine state: {}", actual),
                         format!("First violated invariant: tool '{}' is available", name),
                         format!("Impact: tasks requiring '{}' cannot run", name),
+                    ],
+                )
+            }
+            Constraint::CompilerAvailable {
+                language,
+                min_standard,
+                constraint,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("compiler missing or incompatible");
+                let std_str = min_standard
+                    .as_ref()
+                    .map(|s| format!(" standard {}", s))
+                    .unwrap_or_default();
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" version {}", c))
+                    .unwrap_or_default();
+                (
+                    format!("{}.compiler{}{}", language, std_str, ver_str),
+                    vec![
+                        format!(
+                            "Component '{}' requires compiler for '{}'{}{}",
+                            target_comp, language, std_str, ver_str
+                        ),
+                        format!("Host machine state: {}", actual),
+                        format!(
+                            "First violated invariant: compiler for '{}' is available",
+                            language
+                        ),
+                        format!("Impact: compilation for '{}' cannot proceed", language),
+                    ],
+                )
+            }
+            Constraint::LanguagePackageAvailable {
+                language,
+                package,
+                constraint,
+                scope,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("package missing from runtime environment");
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" {}", c))
+                    .unwrap_or_default();
+                (
+                    format!("{}:{}.available{}", language, package, ver_str),
+                    vec![
+                        format!(
+                            "Component '{}' requires {} package '{}'{} (scope: {})",
+                            target_comp, language, package, ver_str, scope
+                        ),
+                        format!("Host runtime state: {}", actual),
+                        format!(
+                            "First violated invariant: package '{}' is installed in {}",
+                            package, language
+                        ),
+                        format!(
+                            "Impact: build or execution depending on '{}' will fail",
+                            package
+                        ),
+                    ],
+                )
+            }
+            Constraint::SystemLibraryAvailable {
+                name,
+                header,
+                constraint,
+                scope,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("system library missing or not found in library path");
+                let header_str = header
+                    .as_ref()
+                    .map(|h| format!(" with header '{}'", h))
+                    .unwrap_or_default();
+                let ver_str = constraint
+                    .as_ref()
+                    .map(|c| format!(" {}", c))
+                    .unwrap_or_default();
+                (
+                    format!("{}.library{}{}", name, header_str, ver_str),
+                    vec![
+                        format!(
+                            "Component '{}' requires system library '{}'{}{} (scope: {})",
+                            target_comp, name, header_str, ver_str, scope
+                        ),
+                        format!("Host system state: {}", actual),
+                        format!(
+                            "First violated invariant: system library '{}' is installed",
+                            name
+                        ),
+                        format!(
+                            "Impact: native linking or build configuration for '{}' will fail",
+                            name
+                        ),
                     ],
                 )
             }

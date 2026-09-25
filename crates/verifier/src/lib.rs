@@ -81,6 +81,18 @@ pub fn verify_environment(
                 format!("compose_service:{}", service_name),
                 "compose".to_string(),
             ),
+            Constraint::CompilerAvailable { language, .. } => {
+                (format!("compiler:{}", language), "compiler".to_string())
+            }
+            Constraint::LanguagePackageAvailable {
+                language, package, ..
+            } => (
+                format!("package:{}:{}", language, package),
+                "package".to_string(),
+            ),
+            Constraint::SystemLibraryAvailable { name, .. } => {
+                (format!("syslib:{}", name), "system_library".to_string())
+            }
         };
 
         let passed = eval.is_satisfied();

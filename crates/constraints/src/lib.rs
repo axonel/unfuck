@@ -223,32 +223,22 @@ mod tests {
     fn test_evaluate_all_from_requirements() {
         let machine = mock_machine();
         let requirements = vec![
-            ProjectRequirement {
-                name: "python".to_string(),
-                kind: RequirementKind::Runtime {
+            ProjectRequirement::new(
+                "python",
+                RequirementKind::Runtime {
                     name: "python".to_string(),
                     constraint: VersionConstraint::parse(">= 3.11"),
                 },
-                evidence: Evidence::from_repo_file(
-                    PathBuf::from("pyproject.toml"),
-                    None,
-                    "py >= 3.11",
-                ),
-                additional_evidence: vec![],
-            },
-            ProjectRequirement {
-                name: "port:3000".to_string(),
-                kind: RequirementKind::Port {
+                Evidence::from_repo_file(PathBuf::from("pyproject.toml"), None, "py >= 3.11"),
+            ),
+            ProjectRequirement::new(
+                "port:3000",
+                RequirementKind::Port {
                     port: 3000,
                     service_hint: None,
                 },
-                evidence: Evidence::from_repo_file(
-                    PathBuf::from("package.json"),
-                    None,
-                    "port 3000",
-                ),
-                additional_evidence: vec![],
-            },
+                Evidence::from_repo_file(PathBuf::from("package.json"), None, "port 3000"),
+            ),
         ];
 
         let results = evaluate_all(&requirements, &machine);

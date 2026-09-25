@@ -118,6 +118,118 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                 (format!("tool.{}{}", name, constraint_desc), chain)
             }
 
+            Constraint::CompilerAvailable {
+                language,
+                min_standard,
+                constraint,
+            } => {
+                let actual_state = matching_trace
+                    .and_then(|t| t.machine_state.as_deref())
+                    .unwrap_or("compiler missing or incompatible");
+                let std_clause = min_standard
+                    .as_deref()
+                    .map(|s| format!(" supporting {}", s))
+                    .unwrap_or_default();
+                let ver_clause = constraint
+                    .as_ref()
+                    .map(|c| format!(" version {}", c))
+                    .unwrap_or_default();
+
+                let chain = vec![
+                    format!("Host machine state: {}", actual_state),
+                    format!(
+                        "Project specification: requires {} compiler{}{}",
+                        language, std_clause, ver_clause
+                    ),
+                    format!(
+                        "Violated invariant: compiler.{}.available == true",
+                        language
+                    ),
+                    format!(
+                        "Downstream impact: compilation for {} sources cannot proceed",
+                        language
+                    ),
+                ];
+
+                (
+                    format!("compiler.{}{}{}", language, std_clause, ver_clause),
+                    chain,
+                )
+            }
+
+            Constraint::LanguagePackageAvailable {
+                language,
+                package,
+                constraint,
+                scope,
+            } => {
+                let actual_state = matching_trace
+                    .and_then(|t| t.machine_state.as_deref())
+                    .unwrap_or("package missing from runtime environment");
+                let ver_clause = constraint
+                    .as_ref()
+                    .map(|c| format!(" {}", c))
+                    .unwrap_or_default();
+
+                let chain = vec![
+                    format!("Host runtime state: {}", actual_state),
+                    format!(
+                        "Project specification: requires {} package '{}{}' (scope: {:?})",
+                        language, package, ver_clause, scope
+                    ),
+                    format!(
+                        "Violated invariant: {}:{}.installed == true",
+                        language, package
+                    ),
+                    format!(
+                        "Downstream impact: build scripts or modules depending on '{}' will fail",
+                        package
+                    ),
+                ];
+
+                (
+                    format!("{}:{}{}.installed", language, package, ver_clause),
+                    chain,
+                )
+            }
+
+            Constraint::SystemLibraryAvailable {
+                name,
+                header,
+                constraint,
+                scope,
+            } => {
+                let actual_state = matching_trace
+                    .and_then(|t| t.machine_state.as_deref())
+                    .unwrap_or("system library or development header missing");
+                let header_clause = header
+                    .as_deref()
+                    .map(|h| format!(" with header '{}'", h))
+                    .unwrap_or_default();
+                let ver_clause = constraint
+                    .as_ref()
+                    .map(|c| format!(" {}", c))
+                    .unwrap_or_default();
+
+                let chain = vec![
+                    format!("Host system state: {}", actual_state),
+                    format!(
+                        "Project specification: requires system library '{}{}{}' (scope: {:?})",
+                        name, header_clause, ver_clause, scope
+                    ),
+                    format!("Violated invariant: syslib.{}.installed == true", name),
+                    format!(
+                        "Downstream impact: native linking or build configuration for '{}' will fail",
+                        name
+                    ),
+                ];
+
+                (
+                    format!("syslib.{}{}{}.installed", name, header_clause, ver_clause),
+                    chain,
+                )
+            }
+
             Constraint::PortAvailable { port } => {
                 let actual_state = matching_trace
                     .and_then(|t| t.machine_state.as_deref())

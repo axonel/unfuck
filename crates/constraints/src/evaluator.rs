@@ -1,9 +1,12 @@
 use crate::model::{Constraint, ConstraintStatus, EvaluatedConstraint};
 use crate::version::matches_version_constraint;
-use unfuck_core::evidence::Evidence;
+use std::path::Path;
+use std::process::Command;
+use unfuck_core::evidence::{Evidence, EvidenceSource};
 use unfuck_core::ir::{
-    MachineCapability, ProjectRequirement, RequirementKind, ServiceStatus, ToolKind,
+    MachineCapability, ProjectRequirement, RequirementKind, ServiceStatus, ToolKind, ToolScope,
 };
+use unfuck_core::{Confidence, VersionConstraint};
 
 /// Convert a ProjectRequirement into a Constraint.
 pub fn requirement_to_constraint(req: &ProjectRequirement) -> Option<Constraint> {
@@ -72,7 +75,192 @@ pub fn requirement_to_constraint(req: &ProjectRequirement) -> Option<Constraint>
             target: target.clone(),
             details: details.clone(),
         }),
+        RequirementKind::Compiler {
+            language,
+            min_standard,
+            constraint,
+        } => Some(Constraint::CompilerAvailable {
+            language: language.clone(),
+            min_standard: min_standard.clone(),
+            constraint: constraint.clone(),
+        }),
+        RequirementKind::LanguagePackage {
+            language,
+            package,
+            constraint,
+            scope,
+        } => Some(Constraint::LanguagePackageAvailable {
+            language: language.clone(),
+            package: package.clone(),
+            constraint: constraint.clone(),
+            scope: *scope,
+        }),
+        RequirementKind::SystemLibrary {
+            name,
+            header,
+            constraint,
+            scope,
+        } => Some(Constraint::SystemLibraryAvailable {
+            name: name.clone(),
+            header: header.clone(),
+            constraint: constraint.clone(),
+            scope: *scope,
+        }),
     }
+}
+
+fn compiler_supports_standard(
+    compiler_name: &str,
+    lang: &str,
+    standard: &str,
+    tool_version: Option<&str>,
+) -> (bool, Option<String>) {
+    let std_lower = standard.to_lowercase();
+    let lang_lower = lang.to_lowercase();
+
+    // 1. Direct active capability probe (safe, read-only preprocessor check to /dev/null)
+    let lang_flag = if lang_lower == "cpp" || lang_lower == "c++" {
+        "c++"
+    } else {
+        "c"
+    };
+
+    let std_arg = format!("-std={}", std_lower);
+    if let Ok(out) = Command::new(compiler_name)
+        .args([
+            &std_arg,
+            "-E",
+            "-x",
+            lang_flag,
+            "/dev/null",
+            "-o",
+            "/dev/null",
+        ])
+        .output()
+    {
+        if out.status.success() {
+            return (
+                true,
+                Some(format!(
+                    "Compiler '{}' capability probe verified support for -std={}",
+                    compiler_name, standard
+                )),
+            );
+        } else {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("unrecognized command-line option")
+                || stderr.contains("invalid value")
+                || stderr.contains("unknown argument")
+                || stderr.contains("error: invalid")
+            {
+                return (
+                    false,
+                    Some(format!(
+                        "Compiler '{}' does not support standard flag -std={}",
+                        compiler_name, standard
+                    )),
+                );
+            }
+        }
+    }
+
+    // 2. Static version matrix fallback across standards
+    if let Some(ver) = tool_version {
+        let is_gcc = compiler_name.contains("gcc") || compiler_name.contains("g++");
+        let is_clang = compiler_name.contains("clang");
+
+        if lang_lower == "c" {
+            let min_gcc = match std_lower.as_str() {
+                "c99" | "gnu99" => Some("3.0.0"),
+                "c11" | "gnu11" => Some("4.9.0"),
+                "c17" | "gnu17" | "c18" | "gnu18" => Some("8.1.0"),
+                "c23" | "gnu23" => Some("14.0.0"),
+                _ => None,
+            };
+            let min_clang = match std_lower.as_str() {
+                "c99" | "gnu99" => Some("1.0.0"),
+                "c11" | "gnu11" => Some("3.1.0"),
+                "c17" | "gnu17" | "c18" | "gnu18" => Some("6.0.0"),
+                "c23" | "gnu23" => Some("18.0.0"),
+                _ => None,
+            };
+
+            if is_gcc {
+                if let Some(min_v) = min_gcc {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "Compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            } else if is_clang {
+                if let Some(min_v) = min_clang {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "Compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            }
+        } else if lang_lower == "cpp" || lang_lower == "c++" {
+            let min_gcc = match std_lower.as_str() {
+                "c++11" | "gnu++11" => Some("4.8.1"),
+                "c++14" | "gnu++14" => Some("5.0.0"),
+                "c++17" | "gnu++17" => Some("7.0.0"),
+                "c++20" | "gnu++20" => Some("11.0.0"),
+                "c++23" | "gnu++23" => Some("14.0.0"),
+                _ => None,
+            };
+            let min_clang = match std_lower.as_str() {
+                "c++11" | "gnu++11" => Some("3.3.0"),
+                "c++14" | "gnu++14" => Some("3.4.0"),
+                "c++17" | "gnu++17" => Some("5.0.0"),
+                "c++20" | "gnu++20" => Some("10.0.0"),
+                "c++23" | "gnu++23" => Some("17.0.0"),
+                _ => None,
+            };
+
+            if is_gcc {
+                if let Some(min_v) = min_gcc {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "C++ compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            } else if is_clang {
+                if let Some(min_v) = min_clang {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "C++ compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    (true, None)
 }
 
 /// Evaluates a single constraint against machine capabilities.
@@ -575,6 +763,309 @@ pub fn evaluate_constraint(
                 }
             }
         }
+
+        Constraint::CompilerAvailable {
+            language,
+            min_standard,
+            constraint: req_constraint,
+        } => {
+            let candidates: &[&str] = match language.to_lowercase().as_str() {
+                "c" => &["gcc", "clang", "cc"],
+                "cpp" | "c++" => &["g++", "clang++", "c++", "gcc", "clang"],
+                "fortran" => &["gfortran", "flang"],
+                "rust" => &["rustc"],
+                _ => &[language.as_str()],
+            };
+
+            let mut found_tool = None;
+            for cand in candidates {
+                if let Some(tool) = machine.find_tool(cand) {
+                    found_tool = Some(tool.clone());
+                    break;
+                }
+            }
+
+            if let Some(tool) = found_tool {
+                let mut satisfied = true;
+                let mut fail_reason = None;
+
+                if let Some(req_c) = req_constraint {
+                    if let Some(ref ver) = tool.version {
+                        if !req_c.matches(ver) {
+                            satisfied = false;
+                            fail_reason = Some(format!(
+                                "Compiler '{}' version {} does not satisfy requirement {}",
+                                tool.name, ver, req_c
+                            ));
+                        }
+                    }
+                }
+
+                if satisfied {
+                    if let Some(ref std_name) = min_standard {
+                        let (supported, detail) = compiler_supports_standard(
+                            &tool.name,
+                            language,
+                            std_name,
+                            tool.version.as_deref(),
+                        );
+                        if !supported {
+                            satisfied = false;
+                            fail_reason = detail;
+                        }
+                    }
+                }
+
+                if satisfied {
+                    EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Satisfied,
+                        project_evidence,
+                        machine_evidence: Some(tool.evidence.clone()),
+                    }
+                } else {
+                    let reason = fail_reason.unwrap_or_else(|| {
+                        format!("Compiler '{}' does not satisfy requirements", tool.name)
+                    });
+                    let root_cause_hint = format!("{}.compiler_incompatible", language);
+                    EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Violated {
+                            reason,
+                            root_cause_hint,
+                        },
+                        project_evidence,
+                        machine_evidence: Some(tool.evidence.clone()),
+                    }
+                }
+            } else {
+                let reason = format!(
+                    "No compiler found for language '{}' (checked: {})",
+                    language,
+                    candidates.join(", ")
+                );
+                let root_cause_hint = format!("{}.compiler_missing", language);
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Violated {
+                        reason,
+                        root_cause_hint,
+                    },
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            }
+        }
+
+        Constraint::LanguagePackageAvailable {
+            language,
+            package,
+            constraint: _req_constraint,
+            scope,
+        } => {
+            if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            } else if language == "python" {
+                let check_cmd = Command::new("python3")
+                    .args(["-c", &format!("import {}", package)])
+                    .output();
+                match check_cmd {
+                    Ok(out) if out.status.success() => EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Satisfied,
+                        project_evidence,
+                        machine_evidence: None,
+                    },
+                    _ => {
+                        let reason = format!(
+                            "Python module '{}' is not installed in the active Python environment",
+                            package
+                        );
+                        let root_cause_hint = format!("python.{}.missing", package);
+                        EvaluatedConstraint {
+                            constraint: constraint.clone(),
+                            status: ConstraintStatus::Violated {
+                                reason,
+                                root_cause_hint,
+                            },
+                            project_evidence,
+                            machine_evidence: None,
+                        }
+                    }
+                }
+            } else {
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            }
+        }
+
+        Constraint::SystemLibraryAvailable {
+            name,
+            header,
+            constraint: _req_constraint,
+            scope,
+        } => {
+            if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            } else {
+                let mut found_evidence = None;
+
+                // 1. Check pkg-config metadata
+                let pkg_names = if let Some(stripped) = name.strip_prefix("lib") {
+                    vec![name.clone(), stripped.to_string()]
+                } else {
+                    vec![name.clone(), format!("lib{}", name)]
+                };
+
+                for pkg in &pkg_names {
+                    if let Ok(out) = Command::new("pkg-config").args(["--exists", pkg]).output() {
+                        if out.status.success() {
+                            let mut detail = format!("pkg-config metadata exists for '{}'", pkg);
+                            if let Ok(ver_out) = Command::new("pkg-config")
+                                .args(["--modversion", pkg])
+                                .output()
+                            {
+                                if ver_out.status.success() {
+                                    let ver =
+                                        String::from_utf8_lossy(&ver_out.stdout).trim().to_string();
+                                    if !ver.is_empty() {
+                                        detail = format!(
+                                            "pkg-config metadata exists for '{}' (version: {})",
+                                            pkg, ver
+                                        );
+                                    }
+                                }
+                            }
+                            found_evidence = Some(Evidence::new(
+                                EvidenceSource::DynamicProbe {
+                                    target: format!("pkg-config {}", pkg),
+                                    probe_type: "pkg-config".to_string(),
+                                    outcome: detail.clone(),
+                                },
+                                Confidence::Confirmed,
+                                detail,
+                            ));
+                            break;
+                        }
+                    }
+                }
+
+                // 2. Check standard linker-discoverable library paths
+                if found_evidence.is_none() {
+                    let lib_dirs = [
+                        "/usr/lib",
+                        "/usr/lib64",
+                        "/usr/lib/x86_64-linux-gnu",
+                        "/usr/lib/aarch64-linux-gnu",
+                        "/lib",
+                        "/lib64",
+                        "/usr/local/lib",
+                    ];
+                    let mut patterns = Vec::new();
+                    if name.starts_with("lib") {
+                        patterns.push(format!("{}.so", name));
+                        patterns.push(format!("{}.a", name));
+                    } else {
+                        patterns.push(format!("lib{}.so", name));
+                        patterns.push(format!("lib{}.a", name));
+                        patterns.push(format!("{}.so", name));
+                    }
+
+                    for dir in &lib_dirs {
+                        let p = Path::new(dir);
+                        for pat in &patterns {
+                            let candidate = p.join(pat);
+                            if candidate.exists() {
+                                let detail = format!(
+                                    "library binary discoverable by linker at '{}'",
+                                    candidate.display()
+                                );
+                                found_evidence = Some(Evidence::new(
+                                    EvidenceSource::DirectObservation {
+                                        detail: detail.clone(),
+                                    },
+                                    Confidence::High,
+                                    detail,
+                                ));
+                                break;
+                            }
+                        }
+                        if found_evidence.is_some() {
+                            break;
+                        }
+                    }
+                }
+
+                // 3. If header specified, verify header exists
+                if let Some(ref hdr) = header {
+                    let header_dirs = [
+                        "/usr/include",
+                        "/usr/local/include",
+                        "/usr/include/x86_64-linux-gnu",
+                        "/usr/include/aarch64-linux-gnu",
+                    ];
+                    let mut header_path = None;
+                    for dir in &header_dirs {
+                        let p = Path::new(dir).join(hdr);
+                        if p.exists() {
+                            header_path = Some(p);
+                            break;
+                        }
+                    }
+
+                    if let Some(hp) = header_path {
+                        if let Some(ref mut ev) = found_evidence {
+                            ev.description =
+                                format!("{}, header exists at '{}'", ev.description, hp.display());
+                        }
+                    } else {
+                        found_evidence = None;
+                    }
+                }
+
+                if let Some(ev) = found_evidence {
+                    EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Satisfied,
+                        project_evidence,
+                        machine_evidence: Some(ev),
+                    }
+                } else {
+                    let header_clause = header
+                        .as_deref()
+                        .map(|h| format!(" (header '{}')", h))
+                        .unwrap_or_default();
+                    let reason = format!(
+                        "System library '{}'{} is not discoverable via pkg-config or standard library paths",
+                        name, header_clause
+                    );
+                    let root_cause_hint = format!("syslib.{}.missing", name);
+                    EvaluatedConstraint {
+                        constraint: constraint.clone(),
+                        status: ConstraintStatus::Violated {
+                            reason,
+                            root_cause_hint,
+                        },
+                        project_evidence,
+                        machine_evidence: None,
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -584,6 +1075,11 @@ pub fn requirement_to_constraint_with_project(
     project: Option<&unfuck_core::ir::ProjectManifest>,
     machine: &MachineCapability,
 ) -> Option<Constraint> {
+    if let Some(ref plat) = req.platform {
+        if !machine.os.to_lowercase().contains(&plat.to_lowercase()) {
+            return None;
+        }
+    }
     match &req.kind {
         RequirementKind::Service { name, min_version } => {
             if let Some(proj) = project {
