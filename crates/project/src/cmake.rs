@@ -319,17 +319,16 @@ fn eval_condition(
     (platform, is_optional)
 }
 
-/// Parse options from CMake files: `option(<VAR> "<help_text>" [value])`.
+/// Parse options from CMake files: `option(<VAR> "<help_text>" [value])` and `set(<VAR> <VAL> CACHE ...)`.
 pub fn parse_cmake_options(content: &str) -> HashMap<String, bool> {
     let mut options = HashMap::new();
     let clean = strip_cmake_comments(content);
 
-    // Simple pass to find option(...) calls
+    // Simple pass to find option(...) and set(... CACHE ...) calls
     for line in clean.lines() {
         let trimmed = line.trim();
-        if trimmed.to_lowercase().starts_with("option(")
-            || trimmed.to_lowercase().starts_with("option (")
-        {
+        let lower = trimmed.to_lowercase();
+        if lower.starts_with("option(") || lower.starts_with("option (") {
             if let Some(open) = trimmed.find('(') {
                 if let Some(close) = trimmed.rfind(')') {
                     let inner = &trimmed[open + 1..close];
@@ -340,6 +339,20 @@ pub fn parse_cmake_options(content: &str) -> HashMap<String, bool> {
                             default_val.to_uppercase().as_str(),
                             "ON" | "TRUE" | "1" | "YES"
                         );
+                        options.insert(var_name.clone(), is_on);
+                    }
+                }
+            }
+        } else if lower.starts_with("set(") || lower.starts_with("set (") {
+            if let Some(open) = trimmed.find('(') {
+                if let Some(close) = trimmed.rfind(')') {
+                    let inner = &trimmed[open + 1..close];
+                    let tokens = tokenize_args(inner);
+                    if tokens.len() >= 3 && tokens.iter().any(|t| t.eq_ignore_ascii_case("CACHE")) {
+                        let var_name = &tokens[0];
+                        let val = &tokens[1];
+                        let is_on =
+                            matches!(val.to_uppercase().as_str(), "ON" | "TRUE" | "1" | "YES");
                         options.insert(var_name.clone(), is_on);
                     }
                 }
@@ -398,6 +411,305 @@ fn format_standard(lang: &str, raw: &str) -> String {
     }
 }
 
+/// Detect fatal error guards: e.g. `if(NOT FOO_FOUND) message(FATAL_ERROR ...)`
+pub fn detect_fatal_error_guards(commands: &[CMakeCommand]) -> Vec<String> {
+    let mut fatal_pkgs = Vec::new();
+    let mut i = 0;
+    while i < commands.len() {
+        if commands[i].name == "if" {
+            if commands[i].is_guarded_optional {
+                i += 1;
+                continue;
+            }
+            let tokens = &commands[i].args;
+            let is_not_cond = tokens
+                .first()
+                .map(|t| t.eq_ignore_ascii_case("NOT") || t == "!")
+                .unwrap_or(false);
+            if is_not_cond && tokens.len() >= 2 {
+                let var = &tokens[1];
+                let upper = var.to_uppercase();
+                if let Some(pkg) = upper.strip_suffix("_FOUND") {
+                    let mut j = i + 1;
+                    let mut depth = 1;
+                    let mut has_fatal = false;
+                    while j < commands.len() && depth > 0 {
+                        let c = &commands[j];
+                        if c.name == "if" {
+                            depth += 1;
+                        } else if c.name == "endif" {
+                            depth -= 1;
+                        } else if depth == 1 && (c.name == "else" || c.name == "elseif") {
+                            break;
+                        } else if depth == 1
+                            && c.name == "message"
+                            && c.args
+                                .first()
+                                .map(|a| a.eq_ignore_ascii_case("FATAL_ERROR"))
+                                .unwrap_or(false)
+                        {
+                            has_fatal = true;
+                            break;
+                        }
+                        j += 1;
+                    }
+                    if has_fatal {
+                        fatal_pkgs.push(pkg.to_lowercase());
+                    }
+                }
+            }
+        }
+        i += 1;
+    }
+    fatal_pkgs
+}
+
+/// Extract fallback chains: `if(A_FOUND) ... elseif(B_FOUND) ... else() message(FATAL_ERROR ...)`
+pub fn extract_fallback_chains(
+    commands: &[CMakeCommand],
+    rel_path: &Path,
+) -> (Vec<ProjectRequirement>, Vec<String>) {
+    let mut anyof_reqs = Vec::new();
+    let mut absorbed_packages = Vec::new();
+
+    let mut i = 0;
+    while i < commands.len() {
+        if commands[i].name == "if" {
+            let mut depth = 1;
+            let mut j = i + 1;
+            let mut branches: Vec<(Option<Vec<String>>, Vec<CMakeCommand>, usize)> = Vec::new();
+            let mut curr_cond = Some(commands[i].args.clone());
+            let mut curr_cmds = Vec::new();
+            let mut branch_start_line = commands[i].line_no;
+
+            while j < commands.len() && depth > 0 {
+                let cmd = &commands[j];
+                if cmd.name == "if" {
+                    depth += 1;
+                    curr_cmds.push(cmd.clone());
+                } else if cmd.name == "endif" {
+                    depth -= 1;
+                    if depth == 0 {
+                        branches.push((curr_cond.take(), curr_cmds, branch_start_line));
+                        break;
+                    } else {
+                        curr_cmds.push(cmd.clone());
+                    }
+                } else if depth == 1 && cmd.name == "elseif" {
+                    branches.push((curr_cond.take(), curr_cmds, branch_start_line));
+                    curr_cond = Some(cmd.args.clone());
+                    curr_cmds = Vec::new();
+                    branch_start_line = cmd.line_no;
+                } else if depth == 1 && cmd.name == "else" {
+                    branches.push((curr_cond.take(), curr_cmds, branch_start_line));
+                    curr_cond = None;
+                    curr_cmds = Vec::new();
+                    branch_start_line = cmd.line_no;
+                } else {
+                    curr_cmds.push(cmd.clone());
+                }
+                j += 1;
+            }
+
+            // Check if last branch is an else branch with message(FATAL_ERROR ...)
+            let has_fatal_else = branches
+                .last()
+                .map(|(cond, cmds, _)| {
+                    cond.is_none()
+                        && cmds.iter().any(|c| {
+                            c.name == "message"
+                                && c.args
+                                    .first()
+                                    .map(|a| a.eq_ignore_ascii_case("FATAL_ERROR"))
+                                    .unwrap_or(false)
+                        })
+                })
+                .unwrap_or(false);
+
+            if has_fatal_else && branches.len() >= 2 {
+                struct CandidateAlt {
+                    name: String,
+                    platform: Option<String>,
+                }
+                let mut candidates: Vec<CandidateAlt> = Vec::new();
+                let mut set_vars: Vec<String> = Vec::new();
+                let mut has_found_condition = false;
+
+                for (cond_opt, cmds, _) in &branches[..branches.len() - 1] {
+                    if let Some(cond_tokens) = cond_opt {
+                        let joined_cond = cond_tokens.join(" ").to_uppercase();
+                        let mut branch_plat = None;
+                        if joined_cond.contains("WIN32") || joined_cond.contains("MSVC") {
+                            branch_plat = Some("windows".to_string());
+                        } else if joined_cond.contains("APPLE") || joined_cond.contains("DARWIN") {
+                            branch_plat = Some("darwin".to_string());
+                        }
+
+                        let mut branch_has_found = false;
+                        // Check for *_FOUND in condition tokens
+                        for token in cond_tokens {
+                            let upper = token.to_uppercase();
+                            if let Some(pkg) = upper.strip_suffix("_FOUND") {
+                                if !pkg.is_empty()
+                                    && !pkg.contains('$')
+                                    && !pkg.starts_with("CMAKE_")
+                                {
+                                    let mut p_plat = branch_plat.clone();
+                                    if pkg == "SECURITY" || pkg == "COREFOUNDATION" {
+                                        p_plat = Some("darwin".to_string());
+                                    }
+                                    let norm_name = if pkg == "OPENSSL" {
+                                        "openssl".to_string()
+                                    } else if pkg == "MBEDTLS" {
+                                        "mbedtls".to_string()
+                                    } else {
+                                        pkg.to_lowercase()
+                                    };
+                                    if !candidates.iter().any(|c| c.name == norm_name) {
+                                        candidates.push(CandidateAlt {
+                                            name: norm_name,
+                                            platform: p_plat,
+                                        });
+                                    }
+                                    branch_has_found = true;
+                                    has_found_condition = true;
+                                }
+                            }
+                        }
+
+                        // Check for set(VAR "val") in branch commands
+                        for c in cmds {
+                            if c.name == "set" && c.args.len() >= 2 {
+                                let var = &c.args[0];
+                                let val = strip_quotes(&c.args[1]);
+                                if !set_vars.contains(var) {
+                                    set_vars.push(var.clone());
+                                }
+                                if !branch_has_found {
+                                    let val_lower = val.to_lowercase();
+                                    let is_invalid = val.is_empty()
+                                        || val.eq_ignore_ascii_case("ON")
+                                        || val.eq_ignore_ascii_case("OFF")
+                                        || val.eq_ignore_ascii_case("TRUE")
+                                        || val.eq_ignore_ascii_case("FALSE")
+                                        || val.chars().all(|ch| ch.is_ascii_digit())
+                                        || val.starts_with('-')
+                                        || val.contains('$');
+
+                                    if !is_invalid {
+                                        if (val_lower == "winhttp" || val_lower == "schannel")
+                                            && !candidates.iter().any(|c| c.name == val_lower)
+                                        {
+                                            candidates.push(CandidateAlt {
+                                                name: val_lower,
+                                                platform: Some("windows".to_string()),
+                                            });
+                                        } else if val_lower == "securetransport"
+                                            && !candidates.iter().any(|c| c.name == val_lower)
+                                        {
+                                            candidates.push(CandidateAlt {
+                                                name: val_lower,
+                                                platform: Some("darwin".to_string()),
+                                            });
+                                        } else if !candidates.iter().any(|c| c.name == val_lower) {
+                                            candidates.push(CandidateAlt {
+                                                name: val_lower,
+                                                platform: branch_plat.clone(),
+                                            });
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if candidates.len() >= 2 && has_found_condition {
+                    let primary_var = set_vars.first().cloned().unwrap_or_default();
+                    let capability_name = if let Some(stripped) = primary_var.strip_prefix("USE_") {
+                        format!("{}-backend", stripped.to_lowercase())
+                    } else if let Some(stripped) = primary_var.strip_suffix("_BACKEND") {
+                        format!("{}-backend", stripped.to_lowercase())
+                    } else if !primary_var.is_empty() {
+                        primary_var.to_lowercase()
+                    } else {
+                        candidates
+                            .iter()
+                            .map(|c| c.name.as_str())
+                            .collect::<Vec<_>>()
+                            .join("-or-")
+                    };
+
+                    let mut alt_reqs = Vec::new();
+                    for cand in &candidates {
+                        let ev = Evidence::new(
+                            EvidenceSource::BuildConfiguration {
+                                path: rel_path.to_path_buf(),
+                                line: Some(commands[i].line_no),
+                                detail: Some(format!(
+                                    "Alternative provider '{}' in CMake fallback chain for '{}'",
+                                    cand.name, capability_name
+                                )),
+                            },
+                            Confidence::High,
+                            format!(
+                                "Provider '{}' for capability '{}'",
+                                cand.name, capability_name
+                            ),
+                        );
+                        let mut req = ProjectRequirement::new(
+                            &cand.name,
+                            RequirementKind::SystemLibrary {
+                                name: cand.name.clone(),
+                                header: None,
+                                constraint: None,
+                                scope: ToolScope::RequiredForBuild,
+                            },
+                            ev,
+                        );
+                        if let Some(ref plat) = cand.platform {
+                            req = req.with_platform(plat);
+                        }
+                        alt_reqs.push(req);
+                        absorbed_packages.push(cand.name.clone());
+                    }
+
+                    let anyof_ev = Evidence::new(
+                        EvidenceSource::BuildConfiguration {
+                            path: rel_path.to_path_buf(),
+                            line: Some(commands[i].line_no),
+                            detail: Some(format!(
+                                "CMake disjunctive fallback chain for '{}' with fatal error default",
+                                capability_name
+                            )),
+                        },
+                        Confidence::High,
+                        format!(
+                            "Capability '{}' required by CMake build configuration",
+                            capability_name
+                        ),
+                    );
+
+                    let anyof_req = ProjectRequirement::new(
+                        &capability_name,
+                        RequirementKind::AnyOf {
+                            capability: capability_name.clone(),
+                            alternatives: alt_reqs,
+                            scope: ToolScope::RequiredForBuild,
+                        },
+                        anyof_ev,
+                    );
+
+                    anyof_reqs.push(anyof_req);
+                }
+            }
+        }
+        i += 1;
+    }
+
+    (anyof_reqs, absorbed_packages)
+}
+
 /// Analyze CMake project configurations (CMakeLists.txt and referenced subdirectories / .cmake files).
 pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
     let mut is_cmake = false;
@@ -417,63 +729,152 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
 
     is_cmake = true;
 
-    // Discover CMake files to inspect
-    let mut cmake_files: Vec<PathBuf> = vec![PathBuf::from("CMakeLists.txt")];
+    // Discover CMake files to inspect using worklist traversal
+    let mut cmake_files: Vec<PathBuf> = Vec::new();
+    let mut module_paths: Vec<PathBuf> = Vec::new();
+    if root.join("cmake").is_dir() {
+        module_paths.push(PathBuf::from("cmake"));
+    }
+    if root.join("CMake").is_dir() {
+        module_paths.push(PathBuf::from("CMake"));
+    }
 
-    // Read root file once to check for immediate add_subdirectory calls
-    if let Ok(root_content) = fs::read_to_string(&root_cmake) {
-        let commands = parse_cmake_commands(&root_content, &HashMap::new());
+    let mut worklist: Vec<PathBuf> = vec![PathBuf::from("CMakeLists.txt")];
+    let mut visited: std::collections::HashSet<PathBuf> = std::collections::HashSet::new();
+    visited.insert(PathBuf::from("CMakeLists.txt"));
+
+    const MAX_CMAKE_FILES: usize = 64;
+
+    while let Some(rel_path) = worklist.pop() {
+        cmake_files.push(rel_path.clone());
+        if cmake_files.len() >= MAX_CMAKE_FILES {
+            break;
+        }
+
+        let full_path = root.join(&rel_path);
+        let curr_dir = rel_path
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
+
+        let content = match fs::read_to_string(&full_path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let commands = parse_cmake_commands(&content, &HashMap::new());
         for cmd in &commands {
-            if cmd.name == "add_subdirectory" {
-                if let Some(sub) = cmd.args.first() {
-                    let sub_clean = strip_quotes(sub);
-                    let sub_cmakelists = root.join(sub_clean).join("CMakeLists.txt");
-                    if sub_cmakelists.is_file() {
-                        let rel = PathBuf::from(sub_clean).join("CMakeLists.txt");
-                        if !cmake_files.contains(&rel) {
-                            cmake_files.push(rel);
-                        }
-                    }
-                }
-            } else if cmd.name == "include" {
-                if let Some(inc) = cmd.args.first() {
-                    let inc_clean = strip_quotes(inc);
-                    if inc_clean.ends_with(".cmake") {
-                        let inc_path = root.join(inc_clean);
-                        if inc_path.is_file() {
-                            let rel = PathBuf::from(inc_clean);
-                            if !cmake_files.contains(&rel) {
-                                cmake_files.push(rel);
+            match cmd.name.as_str() {
+                "set" | "list" => {
+                    let is_module_path = cmd
+                        .args
+                        .iter()
+                        .any(|a| a.eq_ignore_ascii_case("CMAKE_MODULE_PATH"));
+                    if is_module_path {
+                        for arg in &cmd.args {
+                            let clean = strip_quotes(arg);
+                            if !clean.contains('$')
+                                && !clean.is_empty()
+                                && !clean.eq_ignore_ascii_case("CMAKE_MODULE_PATH")
+                                && !clean.eq_ignore_ascii_case("APPEND")
+                            {
+                                let p = PathBuf::from(clean);
+                                if !module_paths.contains(&p) {
+                                    module_paths.push(p);
+                                }
+                            } else if clean.contains('$') {
+                                if let Some(idx) = clean.rfind('}') {
+                                    let suffix = clean[idx + 1..].trim_start_matches('/');
+                                    if !suffix.is_empty() {
+                                        let p = PathBuf::from(suffix);
+                                        if !module_paths.contains(&p) {
+                                            module_paths.push(p);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
                 }
+                "add_subdirectory" => {
+                    if let Some(sub) = cmd.args.first() {
+                        let sub_clean = strip_quotes(sub);
+                        let sub_rel = curr_dir.join(sub_clean).join("CMakeLists.txt");
+                        let sub_full = root.join(&sub_rel);
+                        if sub_full.is_file() && visited.insert(sub_rel.clone()) {
+                            worklist.push(sub_rel);
+                        }
+                    }
+                }
+                "include" => {
+                    if let Some(inc) = cmd.args.first() {
+                        let inc_clean = strip_quotes(inc);
+                        let candidates = if inc_clean.ends_with(".cmake") {
+                            vec![inc_clean.to_string()]
+                        } else {
+                            vec![inc_clean.to_string(), format!("{}.cmake", inc_clean)]
+                        };
+
+                        let mut found_path = None;
+                        for cand in &candidates {
+                            let p1 = curr_dir.join(cand);
+                            if root.join(&p1).is_file() {
+                                found_path = Some(p1);
+                                break;
+                            }
+                            let p2 = PathBuf::from(cand);
+                            if root.join(&p2).is_file() {
+                                found_path = Some(p2);
+                                break;
+                            }
+                            for m in &module_paths {
+                                let pm = m.join(cand);
+                                if root.join(&pm).is_file() {
+                                    found_path = Some(pm);
+                                    break;
+                                }
+                            }
+                            if found_path.is_some() {
+                                break;
+                            }
+                        }
+
+                        if let Some(p) = found_path {
+                            if visited.insert(p.clone()) {
+                                worklist.push(p);
+                            }
+                        }
+                    }
+                }
+                _ => {}
             }
         }
     }
 
     // Also inspect immediate subdirectories containing CMakeLists.txt (bounded search)
-    if let Ok(entries) = fs::read_dir(root) {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                let file_name = entry.file_name();
-                let dir_str = file_name.to_string_lossy();
-                if dir_str.starts_with('.')
-                    || dir_str == "build"
-                    || dir_str == "target"
-                    || dir_str == "node_modules"
-                    || dir_str == "vendor"
-                {
-                    continue;
-                }
+    if cmake_files.len() < MAX_CMAKE_FILES {
+        if let Ok(entries) = fs::read_dir(root) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.is_dir() {
+                    let file_name = entry.file_name();
+                    let dir_str = file_name.to_string_lossy();
+                    if dir_str.starts_with('.')
+                        || dir_str == "build"
+                        || dir_str == "target"
+                        || dir_str == "node_modules"
+                        || dir_str == "vendor"
+                    {
+                        continue;
+                    }
 
-                let sub_cm = path.join("CMakeLists.txt");
-                if sub_cm.is_file() {
-                    if let Ok(rel) = sub_cm.strip_prefix(root) {
-                        let rel_pb = rel.to_path_buf();
-                        if !cmake_files.contains(&rel_pb) {
-                            cmake_files.push(rel_pb);
+                    let sub_cm = path.join("CMakeLists.txt");
+                    if sub_cm.is_file() {
+                        if let Ok(rel) = sub_cm.strip_prefix(root) {
+                            let rel_pb = rel.to_path_buf();
+                            if visited.insert(rel_pb.clone()) {
+                                cmake_files.push(rel_pb);
+                            }
                         }
                     }
                 }
@@ -504,6 +905,10 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
     let mut seen_python_components: BTreeMap<String, (ToolScope, Evidence)> = BTreeMap::new();
     let mut python_runtime_req: Option<(Option<VersionConstraint>, ToolScope, Evidence)> = None;
 
+    let mut fallback_requirements: Vec<ProjectRequirement> = Vec::new();
+    let mut absorbed_packages: Vec<String> = Vec::new();
+    let mut fatal_error_guarded_packages: Vec<String> = Vec::new();
+
     for rel_path in &cmake_files {
         let full_path = root.join(rel_path);
         let content = match fs::read_to_string(&full_path) {
@@ -512,6 +917,15 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
         };
 
         let commands = parse_cmake_commands(&content, &known_options);
+
+        // Detect fatal error guards in this file
+        let fatal_guards = detect_fatal_error_guards(&commands);
+        fatal_error_guarded_packages.extend(fatal_guards);
+
+        // Detect fallback chains in this file
+        let (f_reqs, f_absorbed) = extract_fallback_chains(&commands, rel_path);
+        fallback_requirements.extend(f_reqs);
+        absorbed_packages.extend(f_absorbed);
 
         for cmd in &commands {
             match cmd.name.as_str() {
@@ -684,7 +1098,10 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
                         let pkg_lower = pkg_name.to_lowercase();
 
                         // Special handling for Python
-                        if pkg_lower == "python" || pkg_lower == "python3" || pkg_lower == "python2"
+                        if pkg_lower == "python"
+                            || pkg_lower == "python3"
+                            || pkg_lower == "python2"
+                            || pkg_lower == "pythoninterp"
                         {
                             let ev = Evidence::new(
                                 EvidenceSource::BuildConfiguration {
@@ -704,7 +1121,12 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
 
                             let combined_constraint = ver_constraint.clone().unwrap_or_else(|| {
                                 VersionConstraint::GreaterEqual(
-                                    if pkg_lower == "python2" { "2.7" } else { "3.0" }.to_string(),
+                                    if pkg_lower == "python2" || pkg_lower == "pythoninterp" {
+                                        "2.7"
+                                    } else {
+                                        "3.0"
+                                    }
+                                    .to_string(),
                                 )
                             });
 
@@ -818,12 +1240,7 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
                     let scope = if is_required {
                         ToolScope::RequiredForBuild
                     } else {
-                        // If find_library is called without explicit options, default to RequiredForBuild unless guarded
-                        if cmd.is_guarded_optional {
-                            ToolScope::Optional
-                        } else {
-                            ToolScope::RequiredForBuild
-                        }
+                        ToolScope::Optional
                     };
 
                     let mut lib_names = Vec::new();
@@ -1023,36 +1440,62 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
         evidence.push(ev);
     }
 
-    // 5. Assemble Python runtime and package requirements
-    if let Some((constraint, _scope, ev)) = python_runtime_req {
-        requirements.push(ProjectRequirement::new(
-            "python",
-            RequirementKind::Runtime {
-                name: "python".to_string(),
-                constraint: constraint
-                    .unwrap_or_else(|| VersionConstraint::GreaterEqual("3.0".to_string())),
-            },
-            ev.clone(),
-        ));
-        evidence.push(ev);
-
-        for (pkg_name, (scope, comp_ev)) in seen_python_components {
-            requirements.push(ProjectRequirement::new(
-                format!("python:{}", pkg_name),
-                RequirementKind::LanguagePackage {
-                    language: "python".to_string(),
-                    package: pkg_name,
-                    constraint: None,
-                    scope,
-                },
-                comp_ev.clone(),
-            ));
-            evidence.push(comp_ev);
+    // Promote packages and python runtime that have fatal error guards
+    for g in &fatal_error_guarded_packages {
+        if g == "pythoninterp" || g == "python" || g == "python3" {
+            if let Some((_, scope, _)) = &mut python_runtime_req {
+                *scope = ToolScope::RequiredForBuild;
+            }
+        } else {
+            for ((pkg, _), (scope, _, _)) in &mut seen_packages {
+                if pkg.eq_ignore_ascii_case(g) {
+                    *scope = ToolScope::RequiredForBuild;
+                }
+            }
         }
+    }
+
+    // 5. Assemble Python runtime and package requirements
+    if let Some((constraint, scope, ev)) = python_runtime_req {
+        if scope == ToolScope::RequiredForBuild {
+            requirements.push(ProjectRequirement::new(
+                "python",
+                RequirementKind::Runtime {
+                    name: "python".to_string(),
+                    constraint: constraint
+                        .unwrap_or_else(|| VersionConstraint::GreaterEqual("3.0".to_string())),
+                },
+                ev.clone(),
+            ));
+            evidence.push(ev);
+
+            for (pkg_name, (comp_scope, comp_ev)) in seen_python_components {
+                requirements.push(ProjectRequirement::new(
+                    format!("python:{}", pkg_name),
+                    RequirementKind::LanguagePackage {
+                        language: "python".to_string(),
+                        package: pkg_name,
+                        constraint: None,
+                        scope: comp_scope,
+                    },
+                    comp_ev.clone(),
+                ));
+                evidence.push(comp_ev);
+            }
+        }
+    }
+
+    // Add fallback requirements (AnyOf disjunctions)
+    for r in fallback_requirements {
+        evidence.push(r.evidence.clone());
+        requirements.push(r);
     }
 
     // 6. Assemble packages and system libraries
     for ((pkg_name, platform), (scope, ev, constraint)) in seen_packages {
+        if absorbed_packages.contains(&pkg_name.to_lowercase()) {
+            continue;
+        }
         let mut req = ProjectRequirement::new(
             pkg_name.clone(),
             RequirementKind::SystemLibrary {
@@ -1256,6 +1699,79 @@ endif()
                 assert_eq!(*scope, ToolScope::Optional);
             }
             _ => panic!("Expected SystemLibrary"),
+        }
+    }
+
+    #[test]
+    fn test_cmake_fallback_chain_extraction() {
+        let dir = tempdir().unwrap();
+        let cmake_content = r#"
+cmake_minimum_required(VERSION 3.10)
+project(sample C)
+find_package(OpenSSL)
+find_package(mbedTLS)
+if(OPENSSL_FOUND)
+    set(USE_HTTPS "OpenSSL")
+elseif(MBEDTLS_FOUND)
+    set(USE_HTTPS "mbedTLS")
+else()
+    message(FATAL_ERROR "Unable to find a suitable HTTPS backend")
+endif()
+"#;
+        fs::write(dir.path().join("CMakeLists.txt"), cmake_content).unwrap();
+
+        let disc = analyze_cmake(dir.path());
+        let anyof_req = disc
+            .requirements
+            .iter()
+            .find(|r| matches!(&r.kind, RequirementKind::AnyOf { .. }))
+            .expect("AnyOf requirement missing");
+
+        match &anyof_req.kind {
+            RequirementKind::AnyOf {
+                capability,
+                alternatives,
+                scope,
+            } => {
+                assert_eq!(capability, "https-backend");
+                assert_eq!(*scope, ToolScope::RequiredForBuild);
+                assert_eq!(alternatives.len(), 2);
+                assert_eq!(alternatives[0].name, "openssl");
+                assert_eq!(alternatives[1].name, "mbedtls");
+            }
+            _ => panic!("Expected AnyOf"),
+        }
+
+        // Absorbed packages should not exist as standalone requirements
+        assert!(disc
+            .requirements
+            .iter()
+            .all(|r| r.name != "openssl" || matches!(&r.kind, RequirementKind::AnyOf { .. })));
+        assert!(disc.requirements.iter().all(|r| r.name != "mbedtls"));
+    }
+
+    #[test]
+    fn test_fatal_error_guard_promotes_python() {
+        let dir = tempdir().unwrap();
+        let cmake_content = r#"
+cmake_minimum_required(VERSION 3.10)
+project(sample C)
+find_package(PythonInterp)
+if(NOT PYTHONINTERP_FOUND)
+    message(FATAL_ERROR "Python is required to build")
+endif()
+"#;
+        fs::write(dir.path().join("CMakeLists.txt"), cmake_content).unwrap();
+
+        let disc = analyze_cmake(dir.path());
+        let python_req = disc
+            .requirements
+            .iter()
+            .find(|r| r.name == "python")
+            .expect("python runtime missing");
+        match &python_req.kind {
+            RequirementKind::Runtime { .. } => {}
+            _ => panic!("Expected Runtime"),
         }
     }
 }

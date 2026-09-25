@@ -87,6 +87,12 @@ pub enum Constraint {
         constraint: Option<VersionConstraint>,
         scope: ToolScope,
     },
+    /// Disjunctive capability requirement satisfied if at least one alternative is satisfied.
+    AnyOf {
+        capability: String,
+        constraints: Vec<Constraint>,
+        scope: ToolScope,
+    },
 }
 
 impl fmt::Display for Constraint {
@@ -263,6 +269,22 @@ impl fmt::Display for Constraint {
                     compose_file.display(),
                     expected_state,
                     actual_state
+                )
+            }
+            Self::AnyOf {
+                capability,
+                constraints,
+                scope,
+            } => {
+                let alts = constraints
+                    .iter()
+                    .map(|c| format!("{}", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                write!(
+                    f,
+                    "Capability '{}' must be satisfied by at least one of [{}] (scope: {:?})",
+                    capability, alts, scope
                 )
             }
         }

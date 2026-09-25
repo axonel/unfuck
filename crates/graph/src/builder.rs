@@ -254,6 +254,9 @@ impl EnvironmentGraph {
                             service_name: Some(service_name),
                             ..
                         } => c.requirements.iter().any(|r| r.name == *service_name),
+                        Constraint::AnyOf { capability, .. } => {
+                            c.requirements.iter().any(|r| r.name == *capability)
+                        }
                         _ => false,
                     };
                     if has_direct_req {
@@ -368,6 +371,35 @@ impl EnvironmentGraph {
                             EdgeData::EvaluatedAs
                         };
                         graph.add_edge(*srv_node, constraint_node, edge_type);
+                    }
+                }
+                Constraint::AnyOf { constraints, .. } => {
+                    for sub_c in constraints {
+                        match sub_c {
+                            Constraint::RuntimeVersion { runtime, .. } => {
+                                if let Some((rt_node, _)) =
+                                    runtime_nodes.get(&runtime.to_lowercase())
+                                {
+                                    let edge_type = if eval.is_violated() {
+                                        EdgeData::Violates
+                                    } else {
+                                        EdgeData::EvaluatedAs
+                                    };
+                                    graph.add_edge(*rt_node, constraint_node, edge_type);
+                                }
+                            }
+                            Constraint::ToolAvailable { name, .. } => {
+                                if let Some((t_node, _)) = tool_nodes.get(&name.to_lowercase()) {
+                                    let edge_type = if eval.is_violated() {
+                                        EdgeData::Violates
+                                    } else {
+                                        EdgeData::EvaluatedAs
+                                    };
+                                    graph.add_edge(*t_node, constraint_node, edge_type);
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 _ => {}
@@ -1006,6 +1038,38 @@ impl EnvironmentGraph {
                         format!(
                             "Impact: connections to service '{}' will fail",
                             service_name
+                        ),
+                    ],
+                )
+            }
+            Constraint::AnyOf {
+                capability,
+                constraints,
+                scope,
+            } => {
+                let actual = machine_state
+                    .as_deref()
+                    .unwrap_or("no provider available on host");
+                let alts_desc = constraints
+                    .iter()
+                    .map(|c| format!("{}", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+                (
+                    format!("capability.{}.unsatisfied", capability),
+                    vec![
+                        format!(
+                            "Component '{}' requires capability '{}' (alternatives: [{}]) (scope: {})",
+                            target_comp, capability, alts_desc, scope
+                        ),
+                        format!("Host machine state: {}", actual),
+                        format!(
+                            "First violated invariant: at least one provider for '{}' must be installed and satisfied",
+                            capability
+                        ),
+                        format!(
+                            "Impact: feature or build requiring '{}' cannot proceed without an alternative provider",
+                            capability
                         ),
                     ],
                 )

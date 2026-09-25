@@ -230,6 +230,39 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                 )
             }
 
+            Constraint::AnyOf {
+                capability,
+                constraints,
+                scope,
+            } => {
+                let actual_state = matching_trace
+                    .and_then(|t| t.machine_state.as_deref())
+                    .unwrap_or("no provider available on host");
+                let alts_desc = constraints
+                    .iter()
+                    .map(|c| format!("{}", c))
+                    .collect::<Vec<_>>()
+                    .join(" OR ");
+
+                let chain = vec![
+                    format!("Host machine state: {}", actual_state),
+                    format!(
+                        "Project specification: requires capability '{}' (alternatives: [{}]) (scope: {:?})",
+                        capability, alts_desc, scope
+                    ),
+                    format!(
+                        "Violated invariant: capability.{}.satisfied == true (at least one provider must be installed)",
+                        capability
+                    ),
+                    format!(
+                        "Downstream impact: feature or build requiring '{}' cannot proceed without an alternative provider",
+                        capability
+                    ),
+                ];
+
+                (format!("capability.{}.unsatisfied", capability), chain)
+            }
+
             Constraint::PortAvailable { port } => {
                 let actual_state = matching_trace
                     .and_then(|t| t.machine_state.as_deref())

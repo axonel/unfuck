@@ -1307,3 +1307,105 @@ fn test_fixture_cmake_system_library() {
         .iter()
         .any(|p| p.category == unfuck_predictor::PredictionCategory::SystemLibraryMissing));
 }
+
+#[test]
+fn test_fixture_anyof_satisfied() {
+    let fixture_path = fixtures_dir().join("fixture-anyof-satisfied");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-anyof-satisfied");
+
+    let anyof_req = manifest
+        .requirements
+        .iter()
+        .find(|r| matches!(&r.kind, unfuck_core::ir::RequirementKind::AnyOf { .. }))
+        .expect("AnyOf requirement");
+
+    match &anyof_req.kind {
+        unfuck_core::ir::RequirementKind::AnyOf {
+            capability,
+            alternatives,
+            ..
+        } => {
+            assert_eq!(capability, "crypto-backend");
+            assert_eq!(alternatives.len(), 2);
+        }
+        _ => unreachable!(),
+    }
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let anyof_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::AnyOf { capability, .. } if capability == "crypto-backend"))
+        .expect("anyof eval");
+
+    // OpenSSL is installed on host, so AnyOf is satisfied
+    assert_eq!(
+        anyof_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    assert!(!preds
+        .iter()
+        .any(|p| p.category == unfuck_predictor::PredictionCategory::CapabilityUnsatisfied));
+}
+
+#[test]
+fn test_fixture_anyof_unsatisfied() {
+    let fixture_path = fixtures_dir().join("fixture-anyof-unsatisfied");
+    let manifest = analyze_project(&fixture_path).expect("analyze fixture-anyof-unsatisfied");
+
+    let anyof_req = manifest
+        .requirements
+        .iter()
+        .find(|r| matches!(&r.kind, unfuck_core::ir::RequirementKind::AnyOf { .. }))
+        .expect("AnyOf requirement");
+
+    match &anyof_req.kind {
+        unfuck_core::ir::RequirementKind::AnyOf {
+            capability,
+            alternatives,
+            ..
+        } => {
+            assert_eq!(capability, "provider-backend");
+            assert_eq!(alternatives.len(), 2);
+        }
+        _ => unreachable!(),
+    }
+
+    let machine = unfuck_scanner::scan_machine();
+    let evals = unfuck_constraints::evaluator::evaluate_project(&manifest, &machine);
+    let anyof_eval = evals
+        .iter()
+        .find(|e| matches!(&e.constraint, unfuck_constraints::model::Constraint::AnyOf { capability, .. } if capability == "provider-backend"))
+        .expect("anyof eval");
+
+    assert!(matches!(
+        anyof_eval.status,
+        unfuck_constraints::model::ConstraintStatus::Violated { .. }
+    ));
+
+    let model = unfuck_core::ir::EnvironmentModel::new(manifest, machine);
+    let preds = unfuck_predictor::predict_failures(&model, &evals);
+    let pred = preds
+        .iter()
+        .find(|p| p.category == unfuck_predictor::PredictionCategory::CapabilityUnsatisfied)
+        .expect("CapabilityUnsatisfied prediction");
+    assert!(pred.summary.contains("provider-backend"));
+
+    let graph = unfuck_graph::EnvironmentGraph::build(&model, &evals);
+    let traces = graph.all_causal_traces();
+    let diagnoses = unfuck_diagnosis::diagnose_all(&preds, &traces);
+    let diag = diagnoses
+        .iter()
+        .find(|d| {
+            d.root_cause
+                .contains("capability.provider-backend.unsatisfied")
+        })
+        .expect("capability unsatisfied diagnosis");
+    assert!(diag
+        .causal_chain
+        .iter()
+        .any(|c| c.contains("provider-backend")));
+}

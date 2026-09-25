@@ -93,6 +93,10 @@ pub fn verify_environment(
             Constraint::SystemLibraryAvailable { name, .. } => {
                 (format!("syslib:{}", name), "system_library".to_string())
             }
+            Constraint::AnyOf { capability, .. } => (
+                format!("capability:{}", capability),
+                "capability".to_string(),
+            ),
         };
 
         let passed = eval.is_satisfied();

@@ -106,6 +106,25 @@ pub fn requirement_to_constraint(req: &ProjectRequirement) -> Option<Constraint>
             constraint: constraint.clone(),
             scope: *scope,
         }),
+        RequirementKind::AnyOf {
+            capability,
+            alternatives,
+            scope,
+        } => {
+            let sub_constraints: Vec<Constraint> = alternatives
+                .iter()
+                .filter_map(requirement_to_constraint)
+                .collect();
+            if sub_constraints.is_empty() {
+                None
+            } else {
+                Some(Constraint::AnyOf {
+                    capability: capability.clone(),
+                    constraints: sub_constraints,
+                    scope: *scope,
+                })
+            }
+        }
     }
 }
 
@@ -1066,6 +1085,121 @@ pub fn evaluate_constraint(
                 }
             }
         }
+
+        Constraint::AnyOf {
+            capability,
+            constraints,
+            scope,
+        } => {
+            let mut satisfied_alts = Vec::new();
+            let mut unknown_alts = Vec::new();
+            let mut violated_reasons = Vec::new();
+
+            for sub_c in constraints {
+                // Ensure alternative probe tests active presence
+                let probe_c = match sub_c {
+                    Constraint::SystemLibraryAvailable {
+                        name,
+                        header,
+                        constraint: c,
+                        ..
+                    } => Constraint::SystemLibraryAvailable {
+                        name: name.clone(),
+                        header: header.clone(),
+                        constraint: c.clone(),
+                        scope: ToolScope::RequiredForBuild,
+                    },
+                    Constraint::ToolAvailable {
+                        name,
+                        kind,
+                        constraint: c,
+                        ..
+                    } => Constraint::ToolAvailable {
+                        name: name.clone(),
+                        kind: *kind,
+                        constraint: c.clone(),
+                        scope: ToolScope::RequiredForBuild,
+                    },
+                    Constraint::LanguagePackageAvailable {
+                        language,
+                        package,
+                        constraint: c,
+                        ..
+                    } => Constraint::LanguagePackageAvailable {
+                        language: language.clone(),
+                        package: package.clone(),
+                        constraint: c.clone(),
+                        scope: ToolScope::RequiredForBuild,
+                    },
+                    other => other.clone(),
+                };
+
+                let eval = evaluate_constraint(&probe_c, machine, None);
+                match &eval.status {
+                    ConstraintStatus::Satisfied => {
+                        satisfied_alts.push((sub_c, eval));
+                    }
+                    ConstraintStatus::Unknown { reason } => {
+                        unknown_alts.push((sub_c, reason.clone()));
+                    }
+                    ConstraintStatus::Violated { reason, .. } => {
+                        violated_reasons.push(format!("{}: {}", sub_c, reason));
+                    }
+                }
+            }
+
+            if !satisfied_alts.is_empty() {
+                let first_ev = satisfied_alts
+                    .first()
+                    .and_then(|(_, e)| e.machine_evidence.clone());
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: first_ev,
+                }
+            } else if !unknown_alts.is_empty() {
+                let reason = format!(
+                    "Capability '{}' status is unknown: cannot verify providers ({})",
+                    capability,
+                    unknown_alts
+                        .iter()
+                        .map(|(c, r)| format!("{}: {}", c, r))
+                        .collect::<Vec<_>>()
+                        .join("; ")
+                );
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Unknown { reason },
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            } else if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            } else {
+                let reason = format!(
+                    "No provider satisfied for capability '{}' (scope: {:?}). Tried: [{}]",
+                    capability,
+                    scope,
+                    violated_reasons.join(" | ")
+                );
+                let root_cause_hint = format!("capability.{}.unsatisfied", capability);
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Violated {
+                        reason,
+                        root_cause_hint,
+                    },
+                    project_evidence,
+                    machine_evidence: None,
+                }
+            }
+        }
     }
 }
 
@@ -1141,6 +1275,25 @@ pub fn requirement_to_constraint_with_project(
                 service: name.clone(),
                 min_version: min_version.clone(),
             })
+        }
+        RequirementKind::AnyOf {
+            capability,
+            alternatives,
+            scope,
+        } => {
+            let sub_constraints: Vec<Constraint> = alternatives
+                .iter()
+                .filter_map(|alt| requirement_to_constraint_with_project(alt, project, machine))
+                .collect();
+            if sub_constraints.is_empty() {
+                None
+            } else {
+                Some(Constraint::AnyOf {
+                    capability: capability.clone(),
+                    constraints: sub_constraints,
+                    scope: *scope,
+                })
+            }
         }
         _ => requirement_to_constraint(req),
     }
@@ -1223,4 +1376,102 @@ pub fn evaluate_all(
         }
     }
     results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use unfuck_core::ir::Runtime;
+
+    #[test]
+    fn test_anyof_satisfied_when_one_alternative_satisfied() {
+        let mut machine = MachineCapability::empty();
+        machine.runtimes.push(Runtime {
+            name: "python".to_string(),
+            version: "3.11.0".to_string(),
+            executable_path: std::path::PathBuf::from("/usr/bin/python3"),
+            evidence: Evidence::new(
+                EvidenceSource::DirectObservation {
+                    detail: "test".to_string(),
+                },
+                Confidence::High,
+                "python 3.11".to_string(),
+            ),
+        });
+
+        let constraint = Constraint::AnyOf {
+            capability: "scripting-runtime".to_string(),
+            constraints: vec![
+                Constraint::RuntimeVersion {
+                    runtime: "ruby".to_string(),
+                    constraint: VersionConstraint::Any,
+                },
+                Constraint::RuntimeVersion {
+                    runtime: "python".to_string(),
+                    constraint: VersionConstraint::parse(">= 3.10"),
+                },
+            ],
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+        assert!(eval.machine_evidence.is_some());
+    }
+
+    #[test]
+    fn test_anyof_violated_when_all_alternatives_violated() {
+        let machine = MachineCapability::empty();
+
+        let constraint = Constraint::AnyOf {
+            capability: "scripting-runtime".to_string(),
+            constraints: vec![
+                Constraint::RuntimeVersion {
+                    runtime: "ruby".to_string(),
+                    constraint: VersionConstraint::Any,
+                },
+                Constraint::RuntimeVersion {
+                    runtime: "lua".to_string(),
+                    constraint: VersionConstraint::Any,
+                },
+            ],
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert!(eval.is_violated());
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint,
+        } = eval.status
+        {
+            assert!(root_cause_hint.contains("capability.scripting-runtime.unsatisfied"));
+            assert!(reason.contains("Tried:"));
+        } else {
+            panic!("expected violated status");
+        }
+    }
+
+    #[test]
+    fn test_anyof_optional_scope_satisfied_even_if_all_fail() {
+        let machine = MachineCapability::empty();
+
+        let constraint = Constraint::AnyOf {
+            capability: "optional-helper".to_string(),
+            constraints: vec![
+                Constraint::RuntimeVersion {
+                    runtime: "nonexistent1".to_string(),
+                    constraint: VersionConstraint::Any,
+                },
+                Constraint::RuntimeVersion {
+                    runtime: "nonexistent2".to_string(),
+                    constraint: VersionConstraint::Any,
+                },
+            ],
+            scope: ToolScope::Optional,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+    }
 }

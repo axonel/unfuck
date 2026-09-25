@@ -23,6 +23,7 @@ pub enum PredictionCategory {
     CompilerMissing,
     LanguagePackageMissing,
     SystemLibraryMissing,
+    CapabilityUnsatisfied,
 }
 
 /// A structured failure prediction derived from deterministic constraint evaluation.
@@ -234,6 +235,46 @@ pub fn predict_failures(
                         confidence: Confidence::High,
                         constraint: eval.constraint.clone(),
                         affected_components: vec![name.clone(), "libraries".to_string(), "build".to_string()],
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: eval.machine_evidence.clone(),
+                    });
+                }
+
+                Constraint::AnyOf {
+                    capability,
+                    constraints,
+                    scope,
+                } => {
+                    if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                        continue;
+                    }
+                    let alternatives_str = constraints
+                        .iter()
+                        .map(|c| match c {
+                            Constraint::SystemLibraryAvailable { name, .. } => name.clone(),
+                            Constraint::ToolAvailable { name, .. } => name.clone(),
+                            Constraint::CompilerAvailable { language, .. } => language.clone(),
+                            Constraint::RuntimeVersion { runtime, .. } => runtime.clone(),
+                            Constraint::PackageManagerVersion { name, .. } => name.clone(),
+                            _ => format!("{}", c),
+                        })
+                        .collect::<Vec<_>>()
+                        .join(" or ");
+
+                    predictions.push(Prediction {
+                        title: format!("Capability '{}' unsatisfied", capability),
+                        category: PredictionCategory::CapabilityUnsatisfied,
+                        summary: format!(
+                            "Project requires capability '{}' (provided by {}), but none of the alternatives are satisfied: {}.",
+                            capability, alternatives_str, reason
+                        ),
+                        confidence: Confidence::High,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![
+                            capability.clone(),
+                            "build".to_string(),
+                            "dependencies".to_string(),
+                        ],
                         project_evidence: eval.project_evidence.clone(),
                         machine_evidence: eval.machine_evidence.clone(),
                     });

@@ -140,6 +140,13 @@ pub enum RequirementKind {
         constraint: Option<VersionConstraint>,
         scope: ToolScope,
     },
+    /// Disjunctive capability requirement satisfied if at least one alternative requirement is satisfied
+    /// (e.g. HTTPS backend provided by OpenSSL OR mbedTLS OR WinHTTP, C compiler provided by GCC OR Clang).
+    AnyOf {
+        capability: String,
+        alternatives: Vec<ProjectRequirement>,
+        scope: ToolScope,
+    },
 }
 
 /// A specific requirement declared by a project, preserving evidence and multi-source provenance.

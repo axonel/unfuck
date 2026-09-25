@@ -31,6 +31,7 @@ enum EntityKey {
     Service(String),
     Port(u16),
     EnvVar(String),
+    Capability(String),
     Other(String),
 }
 
@@ -57,6 +58,9 @@ fn get_entity_key(req: &ProjectRequirement) -> EntityKey {
         RequirementKind::Service { name, .. } => EntityKey::Service(name.to_lowercase()),
         RequirementKind::Port { port, .. } => EntityKey::Port(*port),
         RequirementKind::EnvVar { name, .. } => EntityKey::EnvVar(name.clone()),
+        RequirementKind::AnyOf { capability, .. } => {
+            EntityKey::Capability(capability.to_lowercase())
+        }
         _ => EntityKey::Other(req.name.clone()),
     }
 }
@@ -371,6 +375,48 @@ pub fn consolidate_requirements(requirements: Vec<ProjectRequirement>) -> Vec<Pr
                         language: language.clone(),
                         package: package.clone(),
                         constraint: merged_constraint,
+                        scope: merged_scope,
+                    };
+                    existing.additional_evidence.push(req.evidence);
+                    existing.additional_evidence.extend(req.additional_evidence);
+                }
+                (
+                    RequirementKind::AnyOf {
+                        capability,
+                        alternatives: alts1,
+                        scope: s1,
+                    },
+                    RequirementKind::AnyOf {
+                        alternatives: alts2,
+                        scope: s2,
+                        ..
+                    },
+                ) => {
+                    let mut merged_alts = alts1.clone();
+                    for a2 in alts2 {
+                        let k2 = get_entity_key(a2);
+                        if !merged_alts.iter().any(|a1| get_entity_key(a1) == k2) {
+                            merged_alts.push(a2.clone());
+                        }
+                    }
+                    let merged_scope = match (s1, s2) {
+                        (unfuck_core::ir::ToolScope::RequiredForProject, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForProject) => {
+                            unfuck_core::ir::ToolScope::RequiredForProject
+                        }
+                        (unfuck_core::ir::ToolScope::RequiredForBuild, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForBuild) => {
+                            unfuck_core::ir::ToolScope::RequiredForBuild
+                        }
+                        (unfuck_core::ir::ToolScope::RequiredForTask, _)
+                        | (_, unfuck_core::ir::ToolScope::RequiredForTask) => {
+                            unfuck_core::ir::ToolScope::RequiredForTask
+                        }
+                        _ => *s1,
+                    };
+                    existing.kind = RequirementKind::AnyOf {
+                        capability: capability.clone(),
+                        alternatives: merged_alts,
                         scope: merged_scope,
                     };
                     existing.additional_evidence.push(req.evidence);
