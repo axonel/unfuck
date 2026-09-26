@@ -23,6 +23,7 @@ pub enum PredictionCategory {
     CompilerMissing,
     LanguagePackageMissing,
     SystemLibraryMissing,
+    SystemLibraryIncompatible,
     CapabilityUnsatisfied,
 }
 
@@ -49,7 +50,7 @@ pub fn predict_failures(
     for eval in evaluated_constraints {
         if let ConstraintStatus::Violated {
             reason,
-            root_cause_hint: _,
+            root_cause_hint,
         } = &eval.status
         {
             match &eval.constraint {
@@ -225,9 +226,24 @@ pub fn predict_failures(
                         .as_ref()
                         .map(|c| format!(" {}", c))
                         .unwrap_or_default();
+                    let is_incompatible = root_cause_hint.contains("version_incompatible")
+                        || eval.machine_evidence.is_some()
+                        || reason.contains("version");
+                    let (title, category) = if is_incompatible {
+                        (
+                            format!("System library '{}' version incompatible", name),
+                            PredictionCategory::SystemLibraryIncompatible,
+                        )
+                    } else {
+                        (
+                            format!("System library '{}' missing", name),
+                            PredictionCategory::SystemLibraryMissing,
+                        )
+                    };
+
                     predictions.push(Prediction {
-                        title: format!("System library '{}' missing", name),
-                        category: PredictionCategory::SystemLibraryMissing,
+                        title,
+                        category,
                         summary: format!(
                             "Project requires system library '{}{}{}', but {}. Build or link phase is predicted to fail.",
                             name, header_clause, ver_str, reason
@@ -539,6 +555,41 @@ pub fn predict_failures(
                         confidence: Confidence::High,
                         constraint: eval.constraint.clone(),
                         affected_components: affected,
+                        project_evidence: eval.project_evidence.clone(),
+                        machine_evidence: eval.machine_evidence.clone(),
+                    });
+                }
+            }
+        }
+
+        if let ConstraintStatus::Unknown { reason } = &eval.status {
+            if let Constraint::SystemLibraryAvailable {
+                name,
+                header,
+                constraint,
+                scope,
+            } = &eval.constraint
+            {
+                if !matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                    let header_clause = header
+                        .as_deref()
+                        .map(|h| format!(" (header '{}')", h))
+                        .unwrap_or_default();
+                    let ver_str = constraint
+                        .as_ref()
+                        .map(|c| format!(" {}", c))
+                        .unwrap_or_default();
+
+                    predictions.push(Prediction {
+                        title: format!("System library '{}' version unknown", name),
+                        category: PredictionCategory::SystemLibraryIncompatible,
+                        summary: format!(
+                            "Project requires system library '{}{}{}', but {}. Build or link compatibility cannot be verified.",
+                            name, header_clause, ver_str, reason
+                        ),
+                        confidence: Confidence::Unknown,
+                        constraint: eval.constraint.clone(),
+                        affected_components: vec![name.clone(), "libraries".to_string(), "build".to_string()],
                         project_evidence: eval.project_evidence.clone(),
                         machine_evidence: eval.machine_evidence.clone(),
                     });

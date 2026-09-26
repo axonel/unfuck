@@ -1,6 +1,6 @@
 use crate::model::{Constraint, ConstraintStatus, EvaluatedConstraint};
 use crate::version::matches_version_constraint;
-use std::path::Path;
+use std::path::PathBuf;
 use std::process::Command;
 use unfuck_core::evidence::{Evidence, EvidenceSource};
 use unfuck_core::ir::{
@@ -930,7 +930,7 @@ pub fn evaluate_constraint(
         Constraint::SystemLibraryAvailable {
             name,
             header,
-            constraint: _req_constraint,
+            constraint: req_constraint,
             scope,
         } => {
             if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
@@ -942,6 +942,7 @@ pub fn evaluate_constraint(
                 }
             } else {
                 let mut found_evidence = None;
+                let mut found_version = None;
 
                 // 1. Check pkg-config metadata
                 let pkg_names = if let Some(stripped) = name.strip_prefix("lib") {
@@ -950,26 +951,48 @@ pub fn evaluate_constraint(
                     vec![name.clone(), format!("lib{}", name)]
                 };
 
+                let pkg_config_path = machine
+                    .env_vars
+                    .get("PKG_CONFIG_PATH")
+                    .cloned()
+                    .or_else(|| std::env::var("PKG_CONFIG_PATH").ok());
+
                 for pkg in &pkg_names {
-                    if let Ok(out) = Command::new("pkg-config").args(["--exists", pkg]).output() {
+                    let mut cmd = Command::new("pkg-config");
+                    if let Some(ref pcp) = pkg_config_path {
+                        cmd.env("PKG_CONFIG_PATH", pcp);
+                    }
+                    cmd.args(["--exists", pkg]);
+
+                    if let Ok(out) = cmd.output() {
                         if out.status.success() {
-                            let mut detail = format!("pkg-config metadata exists for '{}'", pkg);
-                            if let Ok(ver_out) = Command::new("pkg-config")
-                                .args(["--modversion", pkg])
-                                .output()
-                            {
+                            let mut ver_discovered = None;
+                            let mut ver_cmd = Command::new("pkg-config");
+                            if let Some(ref pcp) = pkg_config_path {
+                                ver_cmd.env("PKG_CONFIG_PATH", pcp);
+                            }
+                            ver_cmd.args(["--modversion", pkg]);
+
+                            if let Ok(ver_out) = ver_cmd.output() {
                                 if ver_out.status.success() {
                                     let ver =
                                         String::from_utf8_lossy(&ver_out.stdout).trim().to_string();
                                     if !ver.is_empty() {
-                                        detail = format!(
-                                            "pkg-config metadata exists for '{}' (version: {})",
-                                            pkg, ver
-                                        );
+                                        ver_discovered = Some(ver);
                                     }
                                 }
                             }
-                            found_evidence = Some(Evidence::new(
+
+                            let detail = if let Some(ref ver) = ver_discovered {
+                                format!(
+                                    "pkg-config metadata exists for '{}' (version: {})",
+                                    pkg, ver
+                                )
+                            } else {
+                                format!("pkg-config metadata exists for '{}'", pkg)
+                            };
+
+                            let ev = Evidence::new(
                                 EvidenceSource::DynamicProbe {
                                     target: format!("pkg-config {}", pkg),
                                     probe_type: "pkg-config".to_string(),
@@ -977,15 +1000,43 @@ pub fn evaluate_constraint(
                                 },
                                 Confidence::Confirmed,
                                 detail,
-                            ));
-                            break;
+                            );
+
+                            if ver_discovered.is_some() {
+                                found_version = ver_discovered;
+                                found_evidence = Some(ev);
+                                break;
+                            } else if found_evidence.is_none() {
+                                found_evidence = Some(ev);
+                            }
                         }
                     }
                 }
 
                 // 2. Check standard linker-discoverable library paths
                 if found_evidence.is_none() {
-                    let lib_dirs = [
+                    let mut lib_dirs: Vec<PathBuf> = Vec::new();
+                    if let Some(val) = machine
+                        .env_vars
+                        .get("LIBRARY_PATH")
+                        .or_else(|| machine.env_vars.get("LD_LIBRARY_PATH"))
+                    {
+                        for p in std::env::split_paths(val) {
+                            lib_dirs.push(p);
+                        }
+                    } else {
+                        if let Ok(val) = std::env::var("LIBRARY_PATH") {
+                            for p in std::env::split_paths(&val) {
+                                lib_dirs.push(p);
+                            }
+                        }
+                        if let Ok(val) = std::env::var("LD_LIBRARY_PATH") {
+                            for p in std::env::split_paths(&val) {
+                                lib_dirs.push(p);
+                            }
+                        }
+                    }
+                    for default_dir in [
                         "/usr/lib",
                         "/usr/lib64",
                         "/usr/lib/x86_64-linux-gnu",
@@ -993,7 +1044,10 @@ pub fn evaluate_constraint(
                         "/lib",
                         "/lib64",
                         "/usr/local/lib",
-                    ];
+                    ] {
+                        lib_dirs.push(PathBuf::from(default_dir));
+                    }
+
                     let mut patterns = Vec::new();
                     if name.starts_with("lib") {
                         patterns.push(format!("{}.so", name));
@@ -1005,9 +1059,8 @@ pub fn evaluate_constraint(
                     }
 
                     for dir in &lib_dirs {
-                        let p = Path::new(dir);
                         for pat in &patterns {
-                            let candidate = p.join(pat);
+                            let candidate = dir.join(pat);
                             if candidate.exists() {
                                 let detail = format!(
                                     "library binary discoverable by linker at '{}'",
@@ -1031,15 +1084,28 @@ pub fn evaluate_constraint(
 
                 // 3. If header specified, verify header exists
                 if let Some(ref hdr) = header {
-                    let header_dirs = [
+                    let mut header_dirs = Vec::new();
+                    if let Some(val) = machine
+                        .env_vars
+                        .get("CPATH")
+                        .or_else(|| machine.env_vars.get("C_INCLUDE_PATH"))
+                    {
+                        for p in std::env::split_paths(val) {
+                            header_dirs.push(p);
+                        }
+                    }
+                    for default_dir in [
                         "/usr/include",
                         "/usr/local/include",
                         "/usr/include/x86_64-linux-gnu",
                         "/usr/include/aarch64-linux-gnu",
-                    ];
+                    ] {
+                        header_dirs.push(PathBuf::from(default_dir));
+                    }
+
                     let mut header_path = None;
                     for dir in &header_dirs {
-                        let p = Path::new(dir).join(hdr);
+                        let p = dir.join(hdr);
                         if p.exists() {
                             header_path = Some(p);
                             break;
@@ -1053,24 +1119,70 @@ pub fn evaluate_constraint(
                         }
                     } else {
                         found_evidence = None;
+                        found_version = None;
                     }
                 }
 
                 if let Some(ev) = found_evidence {
-                    EvaluatedConstraint {
-                        constraint: constraint.clone(),
-                        status: ConstraintStatus::Satisfied,
-                        project_evidence,
-                        machine_evidence: Some(ev),
+                    match req_constraint {
+                        None => EvaluatedConstraint {
+                            constraint: constraint.clone(),
+                            status: ConstraintStatus::Satisfied,
+                            project_evidence,
+                            machine_evidence: Some(ev),
+                        },
+                        Some(req_c) => {
+                            if let Some(ref ver) = found_version {
+                                if req_c.matches(ver) {
+                                    EvaluatedConstraint {
+                                        constraint: constraint.clone(),
+                                        status: ConstraintStatus::Satisfied,
+                                        project_evidence,
+                                        machine_evidence: Some(ev),
+                                    }
+                                } else {
+                                    let reason = format!(
+                                        "System library '{}' installed version {} does not satisfy requirement {}",
+                                        name, ver, req_c
+                                    );
+                                    let root_cause_hint =
+                                        format!("syslib.{}.version_incompatible", name);
+                                    EvaluatedConstraint {
+                                        constraint: constraint.clone(),
+                                        status: ConstraintStatus::Violated {
+                                            reason,
+                                            root_cause_hint,
+                                        },
+                                        project_evidence,
+                                        machine_evidence: Some(ev),
+                                    }
+                                }
+                            } else {
+                                let reason = format!(
+                                    "System library '{}' was found ({}), but its version could not be determined to verify requirement {}",
+                                    name, ev.description, req_c
+                                );
+                                EvaluatedConstraint {
+                                    constraint: constraint.clone(),
+                                    status: ConstraintStatus::Unknown { reason },
+                                    project_evidence,
+                                    machine_evidence: Some(ev),
+                                }
+                            }
+                        }
                     }
                 } else {
                     let header_clause = header
                         .as_deref()
                         .map(|h| format!(" (header '{}')", h))
                         .unwrap_or_default();
+                    let ver_clause = req_constraint
+                        .as_ref()
+                        .map(|c| format!(" satisfying {}", c))
+                        .unwrap_or_default();
                     let reason = format!(
-                        "System library '{}'{} is not discoverable via pkg-config or standard library paths",
-                        name, header_clause
+                        "System library '{}'{}{} is not discoverable via pkg-config or standard library paths",
+                        name, ver_clause, header_clause
                     );
                     let root_cause_hint = format!("syslib.{}.missing", name);
                     EvaluatedConstraint {
@@ -1158,6 +1270,13 @@ pub fn evaluate_constraint(
                     project_evidence,
                     machine_evidence: first_ev,
                 }
+            } else if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
+                EvaluatedConstraint {
+                    constraint: constraint.clone(),
+                    status: ConstraintStatus::Satisfied,
+                    project_evidence,
+                    machine_evidence: None,
+                }
             } else if !unknown_alts.is_empty() {
                 let reason = format!(
                     "Capability '{}' status is unknown: cannot verify providers ({})",
@@ -1171,13 +1290,6 @@ pub fn evaluate_constraint(
                 EvaluatedConstraint {
                     constraint: constraint.clone(),
                     status: ConstraintStatus::Unknown { reason },
-                    project_evidence,
-                    machine_evidence: None,
-                }
-            } else if matches!(scope, ToolScope::Optional | ToolScope::DeclaredButUnused) {
-                EvaluatedConstraint {
-                    constraint: constraint.clone(),
-                    status: ConstraintStatus::Satisfied,
                     project_evidence,
                     machine_evidence: None,
                 }
@@ -1473,5 +1585,280 @@ mod tests {
 
         let eval = evaluate_constraint(&constraint, &machine, None);
         assert_eq!(eval.status, ConstraintStatus::Satisfied);
+    }
+
+    #[test]
+    fn test_syslib_no_version_constraint_satisfied() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_content =
+            "Name: mockalpha\nDescription: Mock Alpha\nVersion: 1.5.0\nLibs: -lmockalpha\n";
+        std::fs::write(temp_dir.path().join("mockalpha.pc"), pc_content).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::SystemLibraryAvailable {
+            name: "mockalpha".to_string(),
+            header: None,
+            constraint: None,
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+        assert!(eval.machine_evidence.is_some());
+    }
+
+    #[test]
+    fn test_syslib_version_requirement_satisfied() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_content =
+            "Name: mockbeta\nDescription: Mock Beta\nVersion: 2.4.1\nLibs: -lmockbeta\n";
+        std::fs::write(temp_dir.path().join("mockbeta.pc"), pc_content).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::SystemLibraryAvailable {
+            name: "mockbeta".to_string(),
+            header: None,
+            constraint: Some(VersionConstraint::parse(">= 2.0")),
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+        assert!(eval.machine_evidence.is_some());
+    }
+
+    #[test]
+    fn test_syslib_version_requirement_violated() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_content =
+            "Name: mockgamma\nDescription: Mock Gamma\nVersion: 1.2.0\nLibs: -lmockgamma\n";
+        std::fs::write(temp_dir.path().join("mockgamma.pc"), pc_content).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::SystemLibraryAvailable {
+            name: "mockgamma".to_string(),
+            header: None,
+            constraint: Some(VersionConstraint::parse(">= 2.0")),
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert!(eval.is_violated());
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint,
+        } = eval.status
+        {
+            assert_eq!(root_cause_hint, "syslib.mockgamma.version_incompatible");
+            assert!(reason.contains("installed version 1.2.0 does not satisfy requirement >=2.0"));
+        } else {
+            panic!("expected Violated status");
+        }
+    }
+
+    #[test]
+    fn test_syslib_version_unknown() {
+        let lib_dir = tempfile::tempdir().unwrap();
+        let empty_pc_dir = tempfile::tempdir().unwrap();
+        std::fs::write(lib_dir.path().join("libmockdelta_unversioned.so"), b"").unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "LIBRARY_PATH".to_string(),
+            lib_dir.path().display().to_string(),
+        );
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            empty_pc_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::SystemLibraryAvailable {
+            name: "mockdelta_unversioned".to_string(),
+            header: None,
+            constraint: Some(VersionConstraint::parse(">= 2.0")),
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert!(eval.is_unknown());
+        if let ConstraintStatus::Unknown { reason } = eval.status {
+            assert!(reason.contains("version could not be determined to verify requirement >=2.0"));
+        } else {
+            panic!("expected Unknown status");
+        }
+    }
+
+    #[test]
+    fn test_anyof_with_versioned_alternatives() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_a = "Name: backend_a\nDescription: Backend A\nVersion: 1.0.0\nLibs: -lbackend_a\n";
+        let pc_b = "Name: backend_b\nDescription: Backend B\nVersion: 2.5.0\nLibs: -lbackend_b\n";
+        std::fs::write(temp_dir.path().join("backend_a.pc"), pc_a).unwrap();
+        std::fs::write(temp_dir.path().join("backend_b.pc"), pc_b).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::AnyOf {
+            capability: "tls-backend".to_string(),
+            constraints: vec![
+                Constraint::SystemLibraryAvailable {
+                    name: "backend_a".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 2.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+                Constraint::SystemLibraryAvailable {
+                    name: "backend_b".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 2.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+            ],
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+        let ev = eval.machine_evidence.expect("machine evidence");
+        assert!(ev.description.contains("backend_b"));
+    }
+
+    #[test]
+    fn test_anyof_one_provider_compatible_version_satisfied() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_a = "Name: prov_a\nDescription: Provider A\nVersion: 0.9.0\nLibs: -lprov_a\n";
+        let pc_b = "Name: prov_b\nDescription: Provider B\nVersion: 3.1.0\nLibs: -lprov_b\n";
+        std::fs::write(temp_dir.path().join("prov_a.pc"), pc_a).unwrap();
+        std::fs::write(temp_dir.path().join("prov_b.pc"), pc_b).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::AnyOf {
+            capability: "compression".to_string(),
+            constraints: vec![
+                Constraint::SystemLibraryAvailable {
+                    name: "missing_provider_xyz".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 1.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+                Constraint::SystemLibraryAvailable {
+                    name: "prov_a".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 2.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+                Constraint::SystemLibraryAvailable {
+                    name: "prov_b".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 3.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+            ],
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+        let ev = eval.machine_evidence.expect("machine evidence");
+        assert!(ev.description.contains("prov_b"));
+    }
+
+    #[test]
+    fn test_anyof_every_provider_incompatible_version_violated() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_x = "Name: crypto_x\nDescription: Crypto X\nVersion: 1.0.0\nLibs: -lcrypto_x\n";
+        let pc_y = "Name: crypto_y\nDescription: Crypto Y\nVersion: 1.5.0\nLibs: -lcrypto_y\n";
+        std::fs::write(temp_dir.path().join("crypto_x.pc"), pc_x).unwrap();
+        std::fs::write(temp_dir.path().join("crypto_y.pc"), pc_y).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::AnyOf {
+            capability: "crypto-suite".to_string(),
+            constraints: vec![
+                Constraint::SystemLibraryAvailable {
+                    name: "crypto_x".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 2.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+                Constraint::SystemLibraryAvailable {
+                    name: "crypto_y".to_string(),
+                    header: None,
+                    constraint: Some(VersionConstraint::parse(">= 2.0")),
+                    scope: ToolScope::RequiredForBuild,
+                },
+            ],
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert!(eval.is_violated());
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint,
+        } = eval.status
+        {
+            assert_eq!(root_cause_hint, "capability.crypto-suite.unsatisfied");
+            assert!(reason.contains("crypto_x"));
+            assert!(reason.contains("crypto_y"));
+        } else {
+            panic!("expected Violated status");
+        }
+    }
+
+    #[test]
+    fn test_syslib_evidence_contains_discovered_version() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let pc_content =
+            "Name: mockomega\nDescription: Mock Omega\nVersion: 3.14.15\nLibs: -lmockomega\n";
+        std::fs::write(temp_dir.path().join("mockomega.pc"), pc_content).unwrap();
+
+        let mut machine = MachineCapability::empty();
+        machine.env_vars.insert(
+            "PKG_CONFIG_PATH".to_string(),
+            temp_dir.path().display().to_string(),
+        );
+
+        let constraint = Constraint::SystemLibraryAvailable {
+            name: "mockomega".to_string(),
+            header: None,
+            constraint: Some(VersionConstraint::parse(">= 3.0")),
+            scope: ToolScope::RequiredForBuild,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+        let ev = eval.machine_evidence.expect("machine evidence");
+        assert!(ev.description.contains("3.14.15"));
+        assert_eq!(ev.confidence, Confidence::Confirmed);
     }
 }

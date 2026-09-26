@@ -322,4 +322,8 @@ impl EvaluatedConstraint {
     pub fn is_satisfied(&self) -> bool {
         matches!(self.status, ConstraintStatus::Satisfied)
     }
+
+    pub fn is_unknown(&self) -> bool {
+        matches!(self.status, ConstraintStatus::Unknown { .. })
+    }
 }

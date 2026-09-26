@@ -106,6 +106,9 @@ pub fn verify_environment(
             &eval.status
         {
             reason.clone()
+        } else if let unfuck_constraints::model::ConstraintStatus::Unknown { reason } = &eval.status
+        {
+            format!("Status unknown: {}", reason)
         } else {
             "Status unknown".to_string()
         };

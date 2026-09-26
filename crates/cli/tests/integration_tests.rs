@@ -1409,3 +1409,172 @@ fn test_fixture_anyof_unsatisfied() {
         .iter()
         .any(|c| c.contains("provider-backend")));
 }
+
+#[test]
+fn test_system_library_version_evaluation_end_to_end() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let pc_v1 = "Name: libmocktls\nDescription: Mock TLS v1\nVersion: 1.1.1\nLibs: -lmocktls\n";
+    let pc_v3 =
+        "Name: libmockcrypto\nDescription: Mock Crypto v3\nVersion: 3.0.2\nLibs: -lmockcrypto\n";
+    std::fs::write(temp_dir.path().join("libmocktls.pc"), pc_v1).unwrap();
+    std::fs::write(temp_dir.path().join("libmockcrypto.pc"), pc_v3).unwrap();
+
+    let mut machine = unfuck_core::ir::MachineCapability::empty();
+    machine.env_vars.insert(
+        "PKG_CONFIG_PATH".to_string(),
+        temp_dir.path().display().to_string(),
+    );
+
+    // 1. Incompatible version: libmocktls required >= 2.0.0 (installed: 1.1.1)
+    let mut manifest_incomp =
+        unfuck_core::ir::ProjectManifest::empty("test_incomp", temp_dir.path().to_path_buf());
+    manifest_incomp
+        .requirements
+        .push(unfuck_core::ir::ProjectRequirement::new(
+            "libmocktls",
+            unfuck_core::ir::RequirementKind::SystemLibrary {
+                name: "libmocktls".to_string(),
+                header: None,
+                constraint: Some(unfuck_core::VersionConstraint::parse(">= 2.0.0")),
+                scope: unfuck_core::ir::ToolScope::RequiredForBuild,
+            },
+            unfuck_core::evidence::Evidence::new(
+                unfuck_core::evidence::EvidenceSource::DirectObservation {
+                    detail: "test manifest".to_string(),
+                },
+                unfuck_core::Confidence::Confirmed,
+                "requires libmocktls >= 2.0.0".to_string(),
+            ),
+        ));
+
+    let evals_incomp = unfuck_constraints::evaluator::evaluate_project(&manifest_incomp, &machine);
+    assert_eq!(evals_incomp.len(), 1);
+    assert!(evals_incomp[0].is_violated());
+    if let unfuck_constraints::model::ConstraintStatus::Violated {
+        root_cause_hint,
+        reason,
+    } = &evals_incomp[0].status
+    {
+        assert_eq!(root_cause_hint, "syslib.libmocktls.version_incompatible");
+        assert!(reason.contains("1.1.1"));
+    }
+
+    let model_incomp =
+        unfuck_core::ir::EnvironmentModel::new(manifest_incomp.clone(), machine.clone());
+    let preds_incomp = unfuck_predictor::predict_failures(&model_incomp, &evals_incomp);
+    assert_eq!(preds_incomp.len(), 1);
+    assert_eq!(
+        preds_incomp[0].category,
+        unfuck_predictor::PredictionCategory::SystemLibraryIncompatible
+    );
+    assert_eq!(
+        preds_incomp[0].title,
+        "System library 'libmocktls' version incompatible"
+    );
+
+    let graph_incomp = unfuck_graph::EnvironmentGraph::build(&model_incomp, &evals_incomp);
+    let traces_incomp = graph_incomp.all_causal_traces();
+    let diags_incomp = unfuck_diagnosis::diagnose_all(&preds_incomp, &traces_incomp);
+    assert_eq!(diags_incomp.len(), 1);
+    assert_eq!(
+        diags_incomp[0].problem,
+        "System library 'libmocktls' version incompatible"
+    );
+    assert!(diags_incomp[0]
+        .root_cause
+        .contains("syslib.libmocktls.version_incompatible"));
+
+    // 2. Compatible version: libmockcrypto required >= 2.0.0 (installed: 3.0.2)
+    let mut manifest_comp =
+        unfuck_core::ir::ProjectManifest::empty("test_comp", temp_dir.path().to_path_buf());
+    manifest_comp
+        .requirements
+        .push(unfuck_core::ir::ProjectRequirement::new(
+            "libmockcrypto",
+            unfuck_core::ir::RequirementKind::SystemLibrary {
+                name: "libmockcrypto".to_string(),
+                header: None,
+                constraint: Some(unfuck_core::VersionConstraint::parse(">= 2.0.0")),
+                scope: unfuck_core::ir::ToolScope::RequiredForBuild,
+            },
+            unfuck_core::evidence::Evidence::new(
+                unfuck_core::evidence::EvidenceSource::DirectObservation {
+                    detail: "test manifest".to_string(),
+                },
+                unfuck_core::Confidence::Confirmed,
+                "requires libmockcrypto >= 2.0.0".to_string(),
+            ),
+        ));
+
+    let evals_comp = unfuck_constraints::evaluator::evaluate_project(&manifest_comp, &machine);
+    assert_eq!(evals_comp.len(), 1);
+    assert_eq!(
+        evals_comp[0].status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+
+    let model_comp = unfuck_core::ir::EnvironmentModel::new(manifest_comp, machine.clone());
+    let preds_comp = unfuck_predictor::predict_failures(&model_comp, &evals_comp);
+    assert!(preds_comp.is_empty());
+
+    // 3. Disjunctive AnyOf requirement: requires (libmocktls >= 2.0 OR libmockcrypto >= 2.0)
+    let mut manifest_anyof =
+        unfuck_core::ir::ProjectManifest::empty("test_anyof", temp_dir.path().to_path_buf());
+    manifest_anyof
+        .requirements
+        .push(unfuck_core::ir::ProjectRequirement::new(
+            "security-backend",
+            unfuck_core::ir::RequirementKind::AnyOf {
+                capability: "security-backend".to_string(),
+                alternatives: vec![
+                    unfuck_core::ir::ProjectRequirement::new(
+                        "libmocktls",
+                        unfuck_core::ir::RequirementKind::SystemLibrary {
+                            name: "libmocktls".to_string(),
+                            header: None,
+                            constraint: Some(unfuck_core::VersionConstraint::parse(">= 2.0.0")),
+                            scope: unfuck_core::ir::ToolScope::RequiredForBuild,
+                        },
+                        unfuck_core::evidence::Evidence::new(
+                            unfuck_core::evidence::EvidenceSource::DirectObservation {
+                                detail: "test".to_string(),
+                            },
+                            unfuck_core::Confidence::Confirmed,
+                            "alt 1".to_string(),
+                        ),
+                    ),
+                    unfuck_core::ir::ProjectRequirement::new(
+                        "libmockcrypto",
+                        unfuck_core::ir::RequirementKind::SystemLibrary {
+                            name: "libmockcrypto".to_string(),
+                            header: None,
+                            constraint: Some(unfuck_core::VersionConstraint::parse(">= 2.0.0")),
+                            scope: unfuck_core::ir::ToolScope::RequiredForBuild,
+                        },
+                        unfuck_core::evidence::Evidence::new(
+                            unfuck_core::evidence::EvidenceSource::DirectObservation {
+                                detail: "test".to_string(),
+                            },
+                            unfuck_core::Confidence::Confirmed,
+                            "alt 2".to_string(),
+                        ),
+                    ),
+                ],
+                scope: unfuck_core::ir::ToolScope::RequiredForBuild,
+            },
+            unfuck_core::evidence::Evidence::new(
+                unfuck_core::evidence::EvidenceSource::DirectObservation {
+                    detail: "test manifest".to_string(),
+                },
+                unfuck_core::Confidence::Confirmed,
+                "requires security backend".to_string(),
+            ),
+        ));
+
+    let evals_anyof = unfuck_constraints::evaluator::evaluate_project(&manifest_anyof, &machine);
+    assert_eq!(evals_anyof.len(), 1);
+    assert_eq!(
+        evals_anyof[0].status,
+        unfuck_constraints::model::ConstraintStatus::Satisfied
+    );
+}

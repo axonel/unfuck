@@ -199,8 +199,11 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                 constraint,
                 scope,
             } => {
-                let actual_state = matching_trace
-                    .and_then(|t| t.machine_state.as_deref())
+                let actual_state = pred
+                    .machine_evidence
+                    .as_ref()
+                    .map(|e| e.description.as_str())
+                    .or_else(|| matching_trace.and_then(|t| t.machine_state.as_deref()))
                     .unwrap_or("system library or development header missing");
                 let header_clause = header
                     .as_deref()
@@ -211,23 +214,72 @@ pub fn diagnose_all(predictions: &[Prediction], traces: &[CausalTrace]) -> Vec<D
                     .map(|c| format!(" {}", c))
                     .unwrap_or_default();
 
-                let chain = vec![
-                    format!("Host system state: {}", actual_state),
-                    format!(
-                        "Project specification: requires system library '{}{}{}' (scope: {:?})",
-                        name, header_clause, ver_clause, scope
-                    ),
-                    format!("Violated invariant: syslib.{}.installed == true", name),
-                    format!(
-                        "Downstream impact: native linking or build configuration for '{}' will fail",
-                        name
-                    ),
-                ];
+                let is_version_incompatible = pred.category
+                    == unfuck_predictor::PredictionCategory::SystemLibraryIncompatible
+                    && pred.title.contains("incompatible");
+                let is_version_unknown = pred.title.contains("version unknown");
 
-                (
-                    format!("syslib.{}{}{}.installed", name, header_clause, ver_clause),
-                    chain,
-                )
+                if is_version_incompatible {
+                    let chain = vec![
+                        format!(
+                            "Project specification: requires system library '{}{}{}' (scope: {:?})",
+                            name, header_clause, ver_clause, scope
+                        ),
+                        format!("System library constraint: syslib.{} satisfies{}", name, ver_clause),
+                        format!("Host system state: {}", actual_state),
+                        format!(
+                            "Violated invariant: syslib.{}.version satisfies{}",
+                            name, ver_clause
+                        ),
+                        format!(
+                            "Downstream impact: native linking or build configuration for '{}' will fail due to incompatible library version",
+                            name
+                        ),
+                    ];
+                    (
+                        format!("syslib.{}.version_incompatible{}", name, ver_clause),
+                        chain,
+                    )
+                } else if is_version_unknown {
+                    let chain = vec![
+                        format!(
+                            "Project specification: requires system library '{}{}{}' (scope: {:?})",
+                            name, header_clause, ver_clause, scope
+                        ),
+                        format!("System library constraint: syslib.{} satisfies{}", name, ver_clause),
+                        format!("Host system state: {}", actual_state),
+                        format!(
+                            "Unverified invariant: syslib.{}.version satisfies{}",
+                            name, ver_clause
+                        ),
+                        format!(
+                            "Downstream impact: native linking or build configuration for '{}' may fail if installed library version is incompatible",
+                            name
+                        ),
+                    ];
+                    (
+                        format!("syslib.{}.version_unknown{}", name, ver_clause),
+                        chain,
+                    )
+                } else {
+                    let chain = vec![
+                        format!("Host system state: {}", actual_state),
+                        format!(
+                            "Project specification: requires system library '{}{}{}' (scope: {:?})",
+                            name, header_clause, ver_clause, scope
+                        ),
+                        format!("Violated invariant: syslib.{}.installed == true", name),
+                        format!(
+                            "Downstream impact: native linking or build configuration for '{}' will fail",
+                            name
+                        ),
+                    ];
+
+                    (
+                        format!("syslib.{}{}{}.installed", name, header_clause, ver_clause),
+                        chain,
+                    )
+                }
             }
 
             Constraint::AnyOf {
@@ -664,5 +716,117 @@ mod tests {
         assert_eq!(diag.confidence, Confidence::High);
         assert!(diag.root_cause.contains("python.version"));
         assert_eq!(diag.causal_chain.len(), 4);
+    }
+
+    #[test]
+    fn test_diagnosis_distinguishes_missing_vs_incompatible_version() {
+        use unfuck_core::ir::ToolScope;
+        use unfuck_core::version::VersionConstraint;
+
+        // 1. Missing library
+        let missing_pred = Prediction {
+            title: "System library 'libevent' missing".to_string(),
+            category: PredictionCategory::SystemLibraryMissing,
+            summary: "Project requires system library 'libevent >= 2.0', but missing".to_string(),
+            confidence: Confidence::High,
+            constraint: Constraint::SystemLibraryAvailable {
+                name: "libevent".to_string(),
+                header: None,
+                constraint: Some(VersionConstraint::parse(">= 2.0")),
+                scope: ToolScope::RequiredForBuild,
+            },
+            affected_components: vec!["libevent".to_string()],
+            project_evidence: None,
+            machine_evidence: None,
+        };
+
+        // 2. Version incompatible library
+        let incomp_pred = Prediction {
+            title: "System library 'libevent' version incompatible".to_string(),
+            category: PredictionCategory::SystemLibraryIncompatible,
+            summary: "Project requires system library 'libevent >= 2.0', but 1.4 is installed"
+                .to_string(),
+            confidence: Confidence::High,
+            constraint: Constraint::SystemLibraryAvailable {
+                name: "libevent".to_string(),
+                header: None,
+                constraint: Some(VersionConstraint::parse(">= 2.0")),
+                scope: ToolScope::RequiredForBuild,
+            },
+            affected_components: vec!["libevent".to_string()],
+            project_evidence: None,
+            machine_evidence: Some(Evidence::new(
+                unfuck_core::evidence::EvidenceSource::DynamicProbe {
+                    target: "pkg-config libevent".to_string(),
+                    probe_type: "pkg-config".to_string(),
+                    outcome: "version: 1.4.1".to_string(),
+                },
+                Confidence::Confirmed,
+                "pkg-config metadata exists for 'libevent' (version: 1.4.1)".to_string(),
+            )),
+        };
+
+        // 3. Version unknown library
+        let unknown_pred = Prediction {
+            title: "System library 'libevent' version unknown".to_string(),
+            category: PredictionCategory::SystemLibraryIncompatible,
+            summary: "Project requires system library 'libevent >= 2.0', but version unknown"
+                .to_string(),
+            confidence: Confidence::Unknown,
+            constraint: Constraint::SystemLibraryAvailable {
+                name: "libevent".to_string(),
+                header: None,
+                constraint: Some(VersionConstraint::parse(">= 2.0")),
+                scope: ToolScope::RequiredForBuild,
+            },
+            affected_components: vec!["libevent".to_string()],
+            project_evidence: None,
+            machine_evidence: Some(Evidence::new(
+                unfuck_core::evidence::EvidenceSource::DirectObservation {
+                    detail: "library binary discoverable by linker at '/usr/lib/libevent.so'"
+                        .to_string(),
+                },
+                Confidence::High,
+                "library binary discoverable by linker at '/usr/lib/libevent.so'".to_string(),
+            )),
+        };
+
+        let diags = diagnose_all(&[missing_pred, incomp_pred, unknown_pred], &[]);
+        assert_eq!(diags.len(), 3);
+
+        // Missing diagnosis
+        assert_eq!(diags[0].problem, "System library 'libevent' missing");
+        assert!(diags[0].root_cause.contains("syslib.libevent"));
+        assert!(diags[0].root_cause.contains("installed"));
+        assert!(diags[0]
+            .causal_chain
+            .iter()
+            .any(|s| s.contains("Violated invariant: syslib.libevent.installed == true")));
+
+        // Incompatible diagnosis
+        assert_eq!(
+            diags[1].problem,
+            "System library 'libevent' version incompatible"
+        );
+        assert!(diags[1]
+            .root_cause
+            .contains("syslib.libevent.version_incompatible"));
+        assert!(diags[1]
+            .causal_chain
+            .iter()
+            .any(|s| s.contains("Violated invariant: syslib.libevent.version satisfies")));
+
+        // Unknown version diagnosis
+        assert_eq!(
+            diags[2].problem,
+            "System library 'libevent' version unknown"
+        );
+        assert!(diags[2]
+            .root_cause
+            .contains("syslib.libevent.version_unknown"));
+        assert!(diags[2]
+            .causal_chain
+            .iter()
+            .any(|s| s.contains("Unverified invariant: syslib.libevent.version satisfies")));
     }
 }

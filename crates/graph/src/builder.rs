@@ -458,6 +458,9 @@ impl EnvironmentGraph {
                         *confidence,
                         description.clone(),
                     ));
+                    if machine_state.is_none() {
+                        machine_state = Some(description.clone());
+                    }
                 }
             }
         }
@@ -839,24 +842,81 @@ impl EnvironmentGraph {
                     .as_ref()
                     .map(|c| format!(" {}", c))
                     .unwrap_or_default();
-                (
-                    format!("{}.library{}{}", name, header_str, ver_str),
-                    vec![
-                        format!(
-                            "Component '{}' requires system library '{}'{}{} (scope: {})",
-                            target_comp, name, header_str, ver_str, scope
-                        ),
-                        format!("Host system state: {}", actual),
-                        format!(
-                            "First violated invariant: system library '{}' is installed",
-                            name
-                        ),
-                        format!(
-                            "Impact: native linking or build configuration for '{}' will fail",
-                            name
-                        ),
-                    ],
-                )
+
+                let is_version_incompatible = match &status {
+                    ConstraintStatus::Violated {
+                        root_cause_hint, ..
+                    } => root_cause_hint.contains("version_incompatible"),
+                    _ => false,
+                };
+                let is_unknown = matches!(&status, ConstraintStatus::Unknown { .. });
+
+                if is_version_incompatible {
+                    (
+                        format!("syslib.{}.version_incompatible{}", name, ver_str),
+                        vec![
+                            format!(
+                                "Component '{}' requires system library '{}'{}{} (scope: {})",
+                                target_comp, name, header_str, ver_str, scope
+                            ),
+                            format!(
+                                "System library constraint: '{}' must satisfy{}",
+                                name, ver_str
+                            ),
+                            format!("Host system state: {}", actual),
+                            format!(
+                                "First violated invariant: system library '{}' version satisfies{}",
+                                name, ver_str
+                            ),
+                            format!(
+                                "Impact: native linking or build configuration for '{}' will fail due to incompatible library version",
+                                name
+                            ),
+                        ],
+                    )
+                } else if is_unknown {
+                    (
+                        format!("syslib.{}.version_unknown{}", name, ver_str),
+                        vec![
+                            format!(
+                                "Component '{}' requires system library '{}'{}{} (scope: {})",
+                                target_comp, name, header_str, ver_str, scope
+                            ),
+                            format!(
+                                "System library constraint: '{}' must satisfy{}",
+                                name, ver_str
+                            ),
+                            format!("Host system state: {}", actual),
+                            format!(
+                                "Unverified invariant: system library '{}' version satisfies{}",
+                                name, ver_str
+                            ),
+                            format!(
+                                "Impact: native linking or build configuration for '{}' may fail if installed version is incompatible",
+                                name
+                            ),
+                        ],
+                    )
+                } else {
+                    (
+                        format!("{}.library{}{}", name, header_str, ver_str),
+                        vec![
+                            format!(
+                                "Component '{}' requires system library '{}'{}{} (scope: {})",
+                                target_comp, name, header_str, ver_str, scope
+                            ),
+                            format!("Host system state: {}", actual),
+                            format!(
+                                "First violated invariant: system library '{}' is installed",
+                                name
+                            ),
+                            format!(
+                                "Impact: native linking or build configuration for '{}' will fail",
+                                name
+                            ),
+                        ],
+                    )
+                }
             }
             Constraint::PortAvailable { port } => {
                 let actual = machine_state
