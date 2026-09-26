@@ -710,6 +710,130 @@ pub fn extract_fallback_chains(
     (anyof_reqs, absorbed_packages)
 }
 
+fn resolve_cmake_include_path(
+    raw: &str,
+    curr_dir: &Path,
+    root: &Path,
+    module_paths: &[PathBuf],
+) -> Option<PathBuf> {
+    let clean = strip_quotes(raw);
+    if clean.is_empty() {
+        return None;
+    }
+
+    let stripped = if clean.contains('$') {
+        if clean.starts_with("${CMAKE_CURRENT_SOURCE_DIR}") {
+            clean
+                .strip_prefix("${CMAKE_CURRENT_SOURCE_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if clean.starts_with("${CMAKE_CURRENT_LIST_DIR}") {
+            clean
+                .strip_prefix("${CMAKE_CURRENT_LIST_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if clean.starts_with("${CMAKE_SOURCE_DIR}") {
+            clean
+                .strip_prefix("${CMAKE_SOURCE_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if clean.starts_with("${PROJECT_SOURCE_DIR}") {
+            clean
+                .strip_prefix("${PROJECT_SOURCE_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if let Some(idx) = clean.rfind('}') {
+            clean[idx + 1..].trim_start_matches('/')
+        } else {
+            clean
+        }
+    } else {
+        clean
+    };
+
+    if stripped.is_empty() {
+        return None;
+    }
+
+    let candidates = if stripped.ends_with(".cmake") {
+        vec![stripped.to_string()]
+    } else {
+        vec![stripped.to_string(), format!("{}.cmake", stripped)]
+    };
+
+    for cand in &candidates {
+        let p1 = curr_dir.join(cand);
+        if root.join(&p1).is_file() {
+            return Some(p1);
+        }
+        let p2 = PathBuf::from(cand);
+        if root.join(&p2).is_file() {
+            return Some(p2);
+        }
+        for m in module_paths {
+            let pm = m.join(cand);
+            if root.join(&pm).is_file() {
+                return Some(pm);
+            }
+        }
+    }
+
+    None
+}
+
+fn resolve_cmake_subdirectory_path(raw: &str, curr_dir: &Path, root: &Path) -> Option<PathBuf> {
+    let clean = strip_quotes(raw);
+    if clean.is_empty() {
+        return None;
+    }
+
+    let stripped = if clean.contains('$') {
+        if clean.starts_with("${CMAKE_CURRENT_SOURCE_DIR}") {
+            clean
+                .strip_prefix("${CMAKE_CURRENT_SOURCE_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if clean.starts_with("${CMAKE_CURRENT_LIST_DIR}") {
+            clean
+                .strip_prefix("${CMAKE_CURRENT_LIST_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if clean.starts_with("${CMAKE_SOURCE_DIR}") {
+            clean
+                .strip_prefix("${CMAKE_SOURCE_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if clean.starts_with("${PROJECT_SOURCE_DIR}") {
+            clean
+                .strip_prefix("${PROJECT_SOURCE_DIR}")
+                .unwrap_or(clean)
+                .trim_start_matches('/')
+        } else if let Some(idx) = clean.rfind('}') {
+            clean[idx + 1..].trim_start_matches('/')
+        } else {
+            clean
+        }
+    } else {
+        clean
+    };
+
+    if stripped.is_empty() {
+        return None;
+    }
+
+    let p1 = curr_dir.join(stripped).join("CMakeLists.txt");
+    if root.join(&p1).is_file() {
+        return Some(p1);
+    }
+
+    let p2 = PathBuf::from(stripped).join("CMakeLists.txt");
+    if root.join(&p2).is_file() {
+        return Some(p2);
+    }
+
+    None
+}
+
 /// Analyze CMake project configurations (CMakeLists.txt and referenced subdirectories / .cmake files).
 pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
     let mut is_cmake = false;
@@ -798,50 +922,21 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
                 }
                 "add_subdirectory" => {
                     if let Some(sub) = cmd.args.first() {
-                        let sub_clean = strip_quotes(sub);
-                        let sub_rel = curr_dir.join(sub_clean).join("CMakeLists.txt");
-                        let sub_full = root.join(&sub_rel);
-                        if sub_full.is_file() && visited.insert(sub_rel.clone()) {
-                            worklist.push(sub_rel);
+                        if let Some(sub_rel) = resolve_cmake_subdirectory_path(sub, &curr_dir, root)
+                        {
+                            if visited.insert(sub_rel.clone()) {
+                                worklist.push(sub_rel);
+                            }
                         }
                     }
                 }
                 "include" => {
                     if let Some(inc) = cmd.args.first() {
-                        let inc_clean = strip_quotes(inc);
-                        let candidates = if inc_clean.ends_with(".cmake") {
-                            vec![inc_clean.to_string()]
-                        } else {
-                            vec![inc_clean.to_string(), format!("{}.cmake", inc_clean)]
-                        };
-
-                        let mut found_path = None;
-                        for cand in &candidates {
-                            let p1 = curr_dir.join(cand);
-                            if root.join(&p1).is_file() {
-                                found_path = Some(p1);
-                                break;
-                            }
-                            let p2 = PathBuf::from(cand);
-                            if root.join(&p2).is_file() {
-                                found_path = Some(p2);
-                                break;
-                            }
-                            for m in &module_paths {
-                                let pm = m.join(cand);
-                                if root.join(&pm).is_file() {
-                                    found_path = Some(pm);
-                                    break;
-                                }
-                            }
-                            if found_path.is_some() {
-                                break;
-                            }
-                        }
-
-                        if let Some(p) = found_path {
-                            if visited.insert(p.clone()) {
-                                worklist.push(p);
+                        if let Some(inc_rel) =
+                            resolve_cmake_include_path(inc, &curr_dir, root, &module_paths)
+                        {
+                            if visited.insert(inc_rel.clone()) {
+                                worklist.push(inc_rel);
                             }
                         }
                     }
@@ -897,6 +992,7 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
     let mut project_languages: Vec<String> = Vec::new();
     let mut c_standard: Option<String> = None;
     let mut cpp_standard: Option<String> = None;
+    let mut cuda_standard: Option<String> = None;
 
     // Track packages and system libraries
     type PackageKey = (String, Option<String>);
@@ -1007,8 +1103,12 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
 
                 "enable_language" => {
                     for arg in &cmd.args {
-                        let norm = normalize_language(arg);
-                        if !project_languages.contains(&norm) {
+                        let clean = strip_quotes(arg);
+                        if clean.eq_ignore_ascii_case("OPTIONAL") {
+                            continue;
+                        }
+                        let norm = normalize_language(clean);
+                        if !norm.is_empty() && !project_languages.contains(&norm) {
                             project_languages.push(norm);
                         }
                     }
@@ -1039,6 +1139,17 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
                                     cpp_standard = Some(formatted);
                                 }
                             }
+                        } else if var_upper == "CMAKE_CUDA_STANDARD" {
+                            if let Some(val) = cmd.args.get(1) {
+                                let formatted = format_standard("cpp", val);
+                                if let Some(ref current) = cuda_standard {
+                                    if std_rank("cpp", &formatted) > std_rank("cpp", current) {
+                                        cuda_standard = Some(formatted);
+                                    }
+                                } else {
+                                    cuda_standard = Some(formatted);
+                                }
+                            }
                         }
                     }
                 }
@@ -1063,6 +1174,15 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
                                 }
                             } else {
                                 cpp_standard = Some(formatted);
+                            }
+                        } else if let Some(raw_std) = lower.strip_prefix("cuda_std_") {
+                            let formatted = format_standard("cpp", raw_std);
+                            if let Some(ref current) = cuda_standard {
+                                if std_rank("cpp", &formatted) > std_rank("cpp", current) {
+                                    cuda_standard = Some(formatted);
+                                }
+                            } else {
+                                cuda_standard = Some(formatted);
                             }
                         }
                     }
@@ -1400,6 +1520,8 @@ pub fn analyze_cmake(root: &Path) -> CMakeDiscovery {
             c_standard.clone()
         } else if lang == "cpp" {
             cpp_standard.clone()
+        } else if lang == "cuda" {
+            cuda_standard.clone()
         } else {
             None
         };
@@ -1772,6 +1894,99 @@ endif()
         match &python_req.kind {
             RequirementKind::Runtime { .. } => {}
             _ => panic!("Expected Runtime"),
+        }
+    }
+
+    #[test]
+    fn test_cmake_include_with_variable_interpolation() {
+        let dir = tempdir().unwrap();
+        let cmake_content = r#"
+cmake_minimum_required(VERSION 3.10)
+project(sample C)
+include(${CMAKE_CURRENT_SOURCE_DIR}/custom.cmake)
+"#;
+        let custom_content = r#"
+find_package(ZLIB REQUIRED)
+"#;
+        fs::write(dir.path().join("CMakeLists.txt"), cmake_content).unwrap();
+        fs::write(dir.path().join("custom.cmake"), custom_content).unwrap();
+
+        let disc = analyze_cmake(dir.path());
+        let zlib = disc
+            .requirements
+            .iter()
+            .find(|r| r.name == "zlib")
+            .expect("zlib missing");
+        match &zlib.kind {
+            RequirementKind::SystemLibrary { scope, .. } => {
+                assert_eq!(*scope, ToolScope::RequiredForBuild);
+            }
+            _ => panic!("Expected SystemLibrary"),
+        }
+    }
+
+    #[test]
+    fn test_cmake_enable_language_discovery() {
+        let dir = tempdir().unwrap();
+        let cmake_content = r#"
+cmake_minimum_required(VERSION 3.19)
+project(cuda_sample LANGUAGES CXX)
+set(CMAKE_CUDA_STANDARD 17)
+enable_language(CUDA)
+enable_language(Fortran OPTIONAL)
+"#;
+        fs::write(dir.path().join("CMakeLists.txt"), cmake_content).unwrap();
+
+        let disc = analyze_cmake(dir.path());
+        assert!(disc.languages.contains(&"cpp".to_string()));
+        assert!(disc.languages.contains(&"cuda".to_string()));
+        assert!(disc.languages.contains(&"fortran".to_string()));
+
+        let cuda_comp = disc
+            .requirements
+            .iter()
+            .find(|r| r.name == "cuda")
+            .expect("cuda compiler requirement missing");
+        match &cuda_comp.kind {
+            RequirementKind::Compiler {
+                language,
+                min_standard,
+                ..
+            } => {
+                assert_eq!(language, "cuda");
+                assert_eq!(min_standard.as_deref(), Some("c++17"));
+            }
+            _ => panic!("Expected Compiler requirement for cuda"),
+        }
+    }
+
+    #[test]
+    fn test_cmake_add_subdirectory_with_variable_interpolation() {
+        let dir = tempdir().unwrap();
+        let cmake_content = r#"
+cmake_minimum_required(VERSION 3.10)
+project(sample C)
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/components)
+"#;
+        fs::write(dir.path().join("CMakeLists.txt"), cmake_content).unwrap();
+        let comp_dir = dir.path().join("components");
+        fs::create_dir_all(&comp_dir).unwrap();
+        let comp_cmake = r#"
+find_package(BZip2 REQUIRED)
+"#;
+        fs::write(comp_dir.join("CMakeLists.txt"), comp_cmake).unwrap();
+
+        let disc = analyze_cmake(dir.path());
+        let bzip2 = disc
+            .requirements
+            .iter()
+            .find(|r| r.name == "bzip2")
+            .expect("bzip2 missing");
+        match &bzip2.kind {
+            RequirementKind::SystemLibrary { scope, .. } => {
+                assert_eq!(*scope, ToolScope::RequiredForBuild);
+            }
+            _ => panic!("Expected SystemLibrary"),
         }
     }
 }
