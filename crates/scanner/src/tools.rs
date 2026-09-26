@@ -15,6 +15,7 @@ fn resolve_in_path(binary: &str, path_entries: &[PathBuf]) -> Option<PathBuf> {
 }
 
 fn parse_first_semantic_version(output: &str) -> Option<String> {
+    let mut candidate = None;
     for word in output.split_whitespace() {
         let clean = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
         let parts: Vec<&str> = clean.split('.').collect();
@@ -23,10 +24,15 @@ fn parse_first_semantic_version(output: &str) -> Option<String> {
                 .iter()
                 .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
         {
-            return Some(clean.to_string());
+            if parts.len() >= 3 {
+                return Some(clean.to_string());
+            }
+            if candidate.is_none() {
+                candidate = Some(clean.to_string());
+            }
         }
     }
-    None
+    candidate
 }
 
 /// Classify known tool binary names into their appropriate ToolKind.
@@ -51,6 +57,10 @@ pub fn classify_tool_kind(name: &str) -> ToolKind {
         || lower == "cc"
         || lower == "g++"
         || lower == "clang++"
+        || lower == "c++"
+        || lower == "nvcc"
+        || lower == "gfortran"
+        || lower == "flang"
     {
         ToolKind::BuildTool
     } else {
@@ -176,6 +186,9 @@ pub fn scan_tools(
         "g++",
         "clang++",
         "c++",
+        "nvcc",
+        "gfortran",
+        "flang",
         "opentofu",
         "terraform",
         "terragrunt",
@@ -183,12 +196,21 @@ pub fn scan_tools(
         "extism",
     ];
 
+    let mut search_dirs = path_entries.to_vec();
+    // Standard toolkit directories (e.g. CUDA toolkit) that might not be in minimal PATH
+    for extra in ["/usr/local/cuda/bin", "/opt/cuda/bin"] {
+        let p = PathBuf::from(extra);
+        if p.is_dir() && !search_dirs.contains(&p) {
+            search_dirs.push(p);
+        }
+    }
+
     for tool_name in common_tools {
         if observations.iter().any(|o| o.name == *tool_name) {
             continue;
         }
 
-        if let Some(executable_path) = resolve_in_path(tool_name, path_entries) {
+        if let Some(executable_path) = resolve_in_path(tool_name, &search_dirs) {
             let mut cmd = Command::new(&executable_path);
             cmd.arg("--version");
             if let Some(dir) = project_context {
@@ -248,9 +270,37 @@ mod tests {
         assert_eq!(classify_tool_kind("cmake"), ToolKind::BuildTool);
         assert_eq!(classify_tool_kind("wasm-opt"), ToolKind::BuildTool);
         assert_eq!(classify_tool_kind("binaryen"), ToolKind::BuildTool);
+        assert_eq!(classify_tool_kind("nvcc"), ToolKind::BuildTool);
+        assert_eq!(classify_tool_kind("gfortran"), ToolKind::BuildTool);
+        assert_eq!(classify_tool_kind("flang"), ToolKind::BuildTool);
+        assert_eq!(classify_tool_kind("c++"), ToolKind::BuildTool);
         assert_eq!(classify_tool_kind("npm:oazapfts"), ToolKind::CodeGenerator);
         assert_eq!(classify_tool_kind("protoc"), ToolKind::CodeGenerator);
         assert_eq!(classify_tool_kind("opentofu"), ToolKind::DeveloperTool);
         assert_eq!(classify_tool_kind("terragrunt"), ToolKind::DeveloperTool);
+    }
+
+    #[test]
+    fn test_parse_first_semantic_version_nvcc() {
+        let nvcc_output = "nvcc: NVIDIA (R) Cuda compiler driver\nCopyright (c) 2005-2023 NVIDIA Corporation\nBuilt on Wed_Nov_22_10:17:15_PST_2023\nCuda compilation tools, release 12.3, V12.3.107\nBuild cuda_12.3.r12.3/compiler.33567101_0\n";
+        assert_eq!(
+            parse_first_semantic_version(nvcc_output),
+            Some("12.3.107".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_first_semantic_version_standard() {
+        let gcc_output = "gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0";
+        assert_eq!(
+            parse_first_semantic_version(gcc_output),
+            Some("11.4.0".to_string())
+        );
+
+        let make_output = "GNU Make 4.3";
+        assert_eq!(
+            parse_first_semantic_version(make_output),
+            Some("4.3".to_string())
+        );
     }
 }

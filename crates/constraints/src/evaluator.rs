@@ -138,45 +138,71 @@ fn compiler_supports_standard(
     let lang_lower = lang.to_lowercase();
 
     // 1. Direct active capability probe (safe, read-only preprocessor check to /dev/null)
-    let lang_flag = if lang_lower == "cpp" || lang_lower == "c++" {
-        "c++"
+    let std_arg = if std_lower.starts_with("c++")
+        || std_lower.starts_with("gnu++")
+        || std_lower.starts_with("c")
+        || std_lower.starts_with("f")
+    {
+        format!("-std={}", std_lower)
+    } else if lang_lower == "cpp"
+        || lang_lower == "c++"
+        || lang_lower == "cxx"
+        || lang_lower == "cuda"
+        || lang_lower == "cu"
+    {
+        format!("-std=c++{}", std_lower)
     } else {
-        "c"
+        format!("-std=c{}", std_lower)
     };
 
-    let std_arg = format!("-std={}", std_lower);
-    if let Ok(out) = Command::new(compiler_name)
-        .args([
-            &std_arg,
-            "-E",
-            "-x",
-            lang_flag,
-            "/dev/null",
-            "-o",
-            "/dev/null",
-        ])
-        .output()
-    {
+    let mut cmd = Command::new(compiler_name);
+    cmd.arg(&std_arg).arg("-E");
+    if compiler_name.contains("nvcc") || lang_lower == "cuda" || lang_lower == "cu" {
+        cmd.args(["-x", "cu", "/dev/null", "-o", "/dev/null"]);
+    } else if lang_lower == "cpp" || lang_lower == "c++" || lang_lower == "cxx" {
+        cmd.args(["-x", "c++", "/dev/null", "-o", "/dev/null"]);
+    } else if lang_lower == "fortran" {
+        cmd.args(["-x", "f95", "/dev/null", "-o", "/dev/null"]);
+    } else {
+        cmd.args(["-x", "c", "/dev/null", "-o", "/dev/null"]);
+    }
+
+    if let Ok(out) = cmd.output() {
         if out.status.success() {
             return (
                 true,
                 Some(format!(
-                    "Compiler '{}' capability probe verified support for -std={}",
-                    compiler_name, standard
+                    "Compiler '{}' capability probe verified support for {}",
+                    compiler_name, std_arg
                 )),
             );
         } else {
             let stderr = String::from_utf8_lossy(&out.stderr);
+            if stderr.contains("cannot find CUDA") || stderr.contains("cannot find libdevice") {
+                let detail = stderr
+                    .lines()
+                    .find(|l| l.contains("cannot find CUDA") || l.contains("cannot find libdevice"))
+                    .map(|l| l.trim())
+                    .unwrap_or("missing CUDA toolkit");
+                return (
+                    false,
+                    Some(format!(
+                        "Compiler '{}' cannot compile CUDA without an installed CUDA toolkit ({})",
+                        compiler_name, detail
+                    )),
+                );
+            }
             if stderr.contains("unrecognized command-line option")
                 || stderr.contains("invalid value")
                 || stderr.contains("unknown argument")
                 || stderr.contains("error: invalid")
+                || stderr.contains("not recognized")
             {
                 return (
                     false,
                     Some(format!(
-                        "Compiler '{}' does not support standard flag -std={}",
-                        compiler_name, standard
+                        "Compiler '{}' does not support standard flag {}",
+                        compiler_name, std_arg
                     )),
                 );
             }
@@ -187,20 +213,22 @@ fn compiler_supports_standard(
     if let Some(ver) = tool_version {
         let is_gcc = compiler_name.contains("gcc") || compiler_name.contains("g++");
         let is_clang = compiler_name.contains("clang");
+        let is_nvcc = compiler_name.contains("nvcc");
+        let is_gfortran = compiler_name.contains("gfortran");
 
         if lang_lower == "c" {
             let min_gcc = match std_lower.as_str() {
-                "c99" | "gnu99" => Some("3.0.0"),
-                "c11" | "gnu11" => Some("4.9.0"),
-                "c17" | "gnu17" | "c18" | "gnu18" => Some("8.1.0"),
-                "c23" | "gnu23" => Some("14.0.0"),
+                "c99" | "gnu99" | "99" => Some("3.0.0"),
+                "c11" | "gnu11" | "11" => Some("4.9.0"),
+                "c17" | "gnu17" | "c18" | "gnu18" | "17" | "18" => Some("8.1.0"),
+                "c23" | "gnu23" | "23" => Some("14.0.0"),
                 _ => None,
             };
             let min_clang = match std_lower.as_str() {
-                "c99" | "gnu99" => Some("1.0.0"),
-                "c11" | "gnu11" => Some("3.1.0"),
-                "c17" | "gnu17" | "c18" | "gnu18" => Some("6.0.0"),
-                "c23" | "gnu23" => Some("18.0.0"),
+                "c99" | "gnu99" | "99" => Some("1.0.0"),
+                "c11" | "gnu11" | "11" => Some("3.1.0"),
+                "c17" | "gnu17" | "c18" | "gnu18" | "17" | "18" => Some("6.0.0"),
+                "c23" | "gnu23" | "23" => Some("18.0.0"),
                 _ => None,
             };
 
@@ -231,21 +259,21 @@ fn compiler_supports_standard(
                     }
                 }
             }
-        } else if lang_lower == "cpp" || lang_lower == "c++" {
+        } else if lang_lower == "cpp" || lang_lower == "c++" || lang_lower == "cxx" {
             let min_gcc = match std_lower.as_str() {
-                "c++11" | "gnu++11" => Some("4.8.1"),
-                "c++14" | "gnu++14" => Some("5.0.0"),
-                "c++17" | "gnu++17" => Some("7.0.0"),
-                "c++20" | "gnu++20" => Some("11.0.0"),
-                "c++23" | "gnu++23" => Some("14.0.0"),
+                "c++11" | "gnu++11" | "11" => Some("4.8.1"),
+                "c++14" | "gnu++14" | "14" => Some("5.0.0"),
+                "c++17" | "gnu++17" | "17" => Some("7.0.0"),
+                "c++20" | "gnu++20" | "20" => Some("11.0.0"),
+                "c++23" | "gnu++23" | "23" => Some("14.0.0"),
                 _ => None,
             };
             let min_clang = match std_lower.as_str() {
-                "c++11" | "gnu++11" => Some("3.3.0"),
-                "c++14" | "gnu++14" => Some("3.4.0"),
-                "c++17" | "gnu++17" => Some("5.0.0"),
-                "c++20" | "gnu++20" => Some("10.0.0"),
-                "c++23" | "gnu++23" => Some("17.0.0"),
+                "c++11" | "gnu++11" | "11" => Some("3.3.0"),
+                "c++14" | "gnu++14" | "14" => Some("3.4.0"),
+                "c++17" | "gnu++17" | "17" => Some("5.0.0"),
+                "c++20" | "gnu++20" | "20" => Some("10.0.0"),
+                "c++23" | "gnu++23" | "23" => Some("17.0.0"),
                 _ => None,
             };
 
@@ -270,6 +298,73 @@ fn compiler_supports_standard(
                             false,
                             Some(format!(
                                 "C++ compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            }
+        } else if lang_lower == "cuda" || lang_lower == "cu" {
+            let min_nvcc = match std_lower.as_str() {
+                "c++11" | "gnu++11" | "11" => Some("7.0.0"),
+                "c++14" | "gnu++14" | "14" => Some("9.0.0"),
+                "c++17" | "gnu++17" | "17" => Some("11.0.0"),
+                "c++20" | "gnu++20" | "20" => Some("12.0.0"),
+                "c++23" | "gnu++23" | "23" => Some("12.8.0"),
+                _ => None,
+            };
+            let min_clang = match std_lower.as_str() {
+                "c++11" | "gnu++11" | "11" => Some("4.0.0"),
+                "c++14" | "gnu++14" | "14" => Some("6.0.0"),
+                "c++17" | "gnu++17" | "17" => Some("9.0.0"),
+                "c++20" | "gnu++20" | "20" => Some("13.0.0"),
+                _ => None,
+            };
+
+            if is_nvcc {
+                if let Some(min_v) = min_nvcc {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "CUDA compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            } else if is_clang {
+                if let Some(min_v) = min_clang {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "CUDA compiler '{}' version {} is older than minimum version {} required for standard {}",
+                                compiler_name, ver, min_v, standard
+                            )),
+                        );
+                    }
+                }
+            }
+        } else if lang_lower == "fortran" {
+            let min_gfortran = match std_lower.as_str() {
+                "f95" | "fortran95" | "95" => Some("4.3.0"),
+                "f2003" | "fortran2003" | "2003" | "03" => Some("4.5.0"),
+                "f2008" | "fortran2008" | "2008" | "08" => Some("4.8.0"),
+                "f2018" | "fortran2018" | "2018" | "18" => Some("8.1.0"),
+                _ => None,
+            };
+
+            if is_gfortran {
+                if let Some(min_v) = min_gfortran {
+                    let c = VersionConstraint::parse(&format!("< {}", min_v));
+                    if c.matches(ver) {
+                        return (
+                            false,
+                            Some(format!(
+                                "Fortran compiler '{}' version {} is older than minimum version {} required for standard {}",
                                 compiler_name, ver, min_v, standard
                             )),
                         );
@@ -790,7 +885,8 @@ pub fn evaluate_constraint(
         } => {
             let candidates: &[&str] = match language.to_lowercase().as_str() {
                 "c" => &["gcc", "clang", "cc"],
-                "cpp" | "c++" => &["g++", "clang++", "c++", "gcc", "clang"],
+                "cpp" | "c++" | "cxx" => &["g++", "clang++", "c++", "gcc", "clang"],
+                "cuda" | "cu" => &["nvcc", "clang++", "clang"],
                 "fortran" => &["gfortran", "flang"],
                 "rust" => &["rustc"],
                 _ => &[language.as_str()],
@@ -1493,7 +1589,7 @@ pub fn evaluate_all(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use unfuck_core::ir::Runtime;
+    use unfuck_core::ir::{Runtime, ToolObservation};
 
     #[test]
     fn test_anyof_satisfied_when_one_alternative_satisfied() {
@@ -1860,5 +1956,96 @@ mod tests {
         let ev = eval.machine_evidence.expect("machine evidence");
         assert!(ev.description.contains("3.14.15"));
         assert_eq!(ev.confidence, Confidence::Confirmed);
+    }
+
+    #[test]
+    fn test_cuda_compiler_evaluation_satisfied() {
+        let mut machine = MachineCapability::empty();
+        machine.tools.push(ToolObservation {
+            name: "nvcc".to_string(),
+            kind: ToolKind::BuildTool,
+            version: Some("12.3.107".to_string()),
+            executable_path: std::path::PathBuf::from("/usr/local/cuda/bin/nvcc"),
+            evidence: Evidence::new(
+                EvidenceSource::ExecutableInspection {
+                    path: std::path::PathBuf::from("/usr/local/cuda/bin/nvcc"),
+                    version_string: "12.3.107".to_string(),
+                    exit_code: 0,
+                },
+                Confidence::Confirmed,
+                "NVCC compiler found",
+            ),
+        });
+
+        let constraint = Constraint::CompilerAvailable {
+            language: "cuda".to_string(),
+            min_standard: Some("c++17".to_string()),
+            constraint: None,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert_eq!(eval.status, ConstraintStatus::Satisfied);
+    }
+
+    #[test]
+    fn test_cuda_compiler_evaluation_incompatible_standard() {
+        let mut machine = MachineCapability::empty();
+        machine.tools.push(ToolObservation {
+            name: "nvcc".to_string(),
+            kind: ToolKind::BuildTool,
+            version: Some("10.2.89".to_string()),
+            executable_path: std::path::PathBuf::from("/usr/local/cuda/bin/nvcc"),
+            evidence: Evidence::new(
+                EvidenceSource::ExecutableInspection {
+                    path: std::path::PathBuf::from("/usr/local/cuda/bin/nvcc"),
+                    version_string: "10.2.89".to_string(),
+                    exit_code: 0,
+                },
+                Confidence::Confirmed,
+                "NVCC compiler found",
+            ),
+        });
+
+        let constraint = Constraint::CompilerAvailable {
+            language: "cuda".to_string(),
+            min_standard: Some("c++17".to_string()),
+            constraint: None,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert!(eval.is_violated());
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint,
+        } = eval.status
+        {
+            assert_eq!(root_cause_hint, "cuda.compiler_incompatible");
+            assert!(reason.contains("older than minimum version 11.0.0"));
+        } else {
+            panic!("expected Violated status");
+        }
+    }
+
+    #[test]
+    fn test_cuda_compiler_evaluation_missing() {
+        let machine = MachineCapability::empty();
+        let constraint = Constraint::CompilerAvailable {
+            language: "cuda".to_string(),
+            min_standard: Some("c++17".to_string()),
+            constraint: None,
+        };
+
+        let eval = evaluate_constraint(&constraint, &machine, None);
+        assert!(eval.is_violated());
+        if let ConstraintStatus::Violated {
+            reason,
+            root_cause_hint,
+        } = eval.status
+        {
+            assert_eq!(root_cause_hint, "cuda.compiler_missing");
+            assert!(reason.contains("nvcc, clang++, clang"));
+        } else {
+            panic!("expected Violated status");
+        }
     }
 }
